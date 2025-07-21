@@ -15,20 +15,21 @@ from playwright.sync_api import sync_playwright, Page
 # Configuration
 PROJECT_DIR = Path(__file__).parent
 BROWSER_STATE_DIR = PROJECT_DIR / "browser_state"
+EVENTS_DIR = PROJECT_DIR / "events"
 
 
 def setup_directories():
-    """Create necessary directories for storing browser state."""
+    """Create necessary directories for storing browser state and events data."""
     BROWSER_STATE_DIR.mkdir(exist_ok=True)
+    EVENTS_DIR.mkdir(exist_ok=True)
 
 
-def is_login_page(page: Page, debug=False) -> bool:
+def is_login_page(page: Page) -> bool:
     """
     Detect if we've been redirected to a login page.
     
     Args:
         page: Playwright page object
-        debug: Whether to show debug output
         
     Returns:
         bool: True if on a login page, False otherwise
@@ -124,7 +125,7 @@ def main(group_name: str, headless: bool):
                 return
             
             # Check if we hit a login page
-            if is_login_page(page, debug=True):
+            if is_login_page(page):
                 if not wait_for_login_completion(page):
                     print("❌ Login verification failed. Exiting.")
                     return
