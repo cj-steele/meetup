@@ -1,5 +1,6 @@
 # Project-specific
 browser_state/
+events/
 venv/
 .idea/
 
