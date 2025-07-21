@@ -33,115 +33,14 @@ def is_login_page(page: Page, debug=False) -> bool:
     Returns:
         bool: True if on a login page, False otherwise
     """
-    current_url = page.url.lower()
-    
-    if debug:
-        print(f"🔍 Checking login status for URL: {current_url}")
-    
-    # First check if we're already on the target page (past events or group page)
-    if any(indicator in current_url for indicator in ['/events/past', '/events/', 'meetup.com/']):
-        # If we're on a meetup page that's not explicitly a login page, assume we're good
-        if not any(login_indicator in current_url for login_indicator in ['/login', '/signin', '/sign-in', '/auth']):
-            if debug:
-                print("✅ URL indicates we're on a valid Meetup page")
-            return False
-    
-    # Check URL patterns that definitively indicate login
-    login_url_indicators = [
-        '/login',
-        '/signin', 
-        '/sign-in',
-        '/auth',
-        '/register',
-        '/signup',
-        'login.meetup.com',
-        'secure.meetup.com/login'
-    ]
-    
-    # Check if any login indicators are in the URL path
-    if any(indicator in current_url for indicator in login_url_indicators):
-        if debug:
-            print(f"❌ URL contains login indicator: {current_url}")
-        return True
-    
-    # Only do element checking if URL is ambiguous
-    try:
-        # Look for very specific login form patterns
-        login_form_selector = 'form[action*="login"], form[action*="signin"], form[action*="auth"]'
-        has_login_form = page.locator(login_form_selector).first.is_visible(timeout=1000)
-        
-        if has_login_form:
-            if debug:
-                print("❌ Found login form on page")
-            return True
-            
-        # Look for specific Meetup login button/text
-        meetup_login_selectors = [
-            'text="Log in"',
-            'text="Sign in"', 
-            '[data-testid*="login"]',
-            'button:has-text("Log in")',
-            'button:has-text("Sign in")'
-        ]
-        
-        for selector in meetup_login_selectors:
-            if page.locator(selector).first.is_visible(timeout=500):
-                if debug:
-                    print(f"❌ Found login element: {selector}")
-                return True
-                
-    except Exception as e:
-        if debug:
-            print(f"⚠️  Exception during login detection: {e}")
-        pass
-    
-    if debug:
-        print("✅ No login indicators found")
-    return False
+    return page.title().startswith("Login to Meetup")
 
 
 def wait_for_login_completion(page: Page):
-    """
-    Wait for user to complete login and notify when done.
-    
-    Args:
-        page: Playwright page object
-    """
-    print("\n🔐 Login Required!")
-    print("=" * 50)
-    print("It looks like you need to log in to Meetup.com")
-    print("Please log in using the browser window that opened.")
-    print("After logging in successfully, press ENTER to continue...")
-    print("=" * 50)
-    
-    # Wait for user to press enter
+    """Wait for user to complete login."""
+    print("\n🔐 Please log in using the browser window")
+    print("Press ENTER when you're logged in and ready to continue...")
     input()
-    
-    # Wait briefly for any immediate redirects
-    print("⏳ Checking if page redirects automatically...")
-    login_url = page.url
-    
-    # Wait up to 3 seconds for URL to change from login page
-    for i in range(3):
-        time.sleep(1)
-        current_url = page.url
-        if current_url != login_url:
-            print(f"✅ Page redirected to: {current_url}")
-            break
-    else:
-        print("ℹ️  Meetup doesn't auto-redirect after login (this is normal)")
-    
-    # Debug: Show current URL
-    current_url = page.url
-    print(f"🔍 Current URL: {current_url}")
-    
-    # Verify login was successful
-    if is_login_page(page, debug=False):  # Less verbose since this is expected
-        print("📋 Still on login page - this is normal for Meetup.com")
-        print("✅ Assuming login was successful and proceeding...")
-        return True
-    
-    print("✅ Login successful! Continuing...")
     return True
 
 
@@ -161,10 +60,12 @@ def navigate_to_group_events(page: Page, group_name: str) -> bool:
         events_url = f"https://www.meetup.com/{group_name}/events/past/"
         
         print(f"📍 Navigating to: {events_url}")
-        page.goto(events_url, wait_until="domcontentloaded", timeout=30000)
+        response = page.goto(events_url, wait_until="domcontentloaded", timeout=30000)
         
-        # Wait a moment for any redirects
-        time.sleep(2)
+        # Check if we got a 404 or other error
+        if response and response.status >= 400:
+            print(f"❌ Group '{group_name}' may not exist (HTTP {response.status})")
+            return False
         
         return True
         
@@ -203,7 +104,11 @@ def main(group_name: str, headless: bool):
                 headless=headless,
                 args=[
                     "--no-first-run",
-                    "--disable-blink-features=AutomationControlled"
+                    "--disable-blink-features=AutomationControlled",
+                    "--disable-dev-shm-usage",
+                    "--no-sandbox",
+                    "--disable-extensions",
+                    "--user-agent=Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
                 ]
             )
             
