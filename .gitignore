@@ -1,6 +1,7 @@
 # Project-specific
 browser_state/
 venv/
+.idea/
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

@@ -6,12 +6,11 @@ A command line tool to access past events for a specific Meetup group.
 Handles login detection and session persistence.
 """
 
-import os
 import sys
 import time
 import click
 from pathlib import Path
-from playwright.sync_api import sync_playwright, BrowserContext, Page
+from playwright.sync_api import sync_playwright, Page
 
 # Configuration
 PROJECT_DIR = Path(__file__).parent
