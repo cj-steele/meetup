@@ -10,6 +10,7 @@ import sys
 import time
 import json
 import re
+import requests
 from datetime import datetime
 import click
 from pathlib import Path
@@ -25,6 +26,8 @@ def setup_directories():
     """Create necessary directories for storing browser state and events data."""
     BROWSER_STATE_DIR.mkdir(exist_ok=True)
     EVENTS_DIR.mkdir(exist_ok=True)
+    ATTENDEES_DIR = EVENTS_DIR / "attendees"
+    ATTENDEES_DIR.mkdir(exist_ok=True)
 
 
 def is_login_page(page: Page) -> bool:
@@ -86,9 +89,9 @@ def navigate_to_group_events(page: Page, group_name: str) -> bool:
         return False
 
 
-def scroll_to_load_events(page: Page, max_events: int) -> None:
+def scroll_to_load_events(page: Page, max_events: int):
     """
-    Scroll down the page to load all events up to max_events.
+    Scroll the page to load more events dynamically.
     
     Args:
         page: Playwright page object
@@ -108,11 +111,11 @@ def scroll_to_load_events(page: Page, max_events: int) -> None:
         page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
         time.sleep(2)  # Wait for new content to load
         
-        # Count events 
-        events = page.locator('a[href*="/events/"]').all()
-        current_count = len(events)
+        # Count events using CSS selector for event cards
+        event_cards = page.locator('[id^="past-event-card-ep-"]')
+        current_count = event_cards.count()
         
-        print(f"   Found {current_count} event links...")
+        print(f"   Found {current_count} event cards...")
         
         # Stop if we have enough events or no new events loaded
         if current_count >= max_events or current_count == previous_count:
@@ -121,13 +124,232 @@ def scroll_to_load_events(page: Page, max_events: int) -> None:
         previous_count = current_count
         scroll_attempts += 1
     
-    print(f"✅ Loaded {min(current_count, max_events)} events")
+    print(f"✅ Loaded {current_count} events")
+    return current_count
 
+
+
+def download_avatar(avatar_url: str, filename: str, attendees_dir: Path) -> str:
+    """
+    Download an avatar image and save it to the attendees directory.
+    
+    Args:
+        avatar_url: URL of the avatar image (e.g., contains thumb_323391730.jpeg)
+        filename: Attendee name to use in filename
+        attendees_dir: Directory to save avatars in
+        
+    Returns:
+        Relative path to the saved avatar or empty string if failed
+    """
+    try:
+        # Extract member ID from avatar URL (e.g., thumb_323391730.jpeg -> 323391730)
+        member_id = ""
+        id_match = re.search(r'thumb_(\d+)', avatar_url)
+        if id_match:
+            member_id = id_match.group(1)
+        
+        # Clean filename to be filesystem-safe
+        safe_name = re.sub(r'[^\w\s-]', '', filename).strip()
+        safe_name = re.sub(r'[-\s]+', '-', safe_name)
+        
+        # Create filename with format: [name]_[member_id].jpg
+        if member_id:
+            safe_filename = f"{safe_name}_{member_id}.jpg"
+        else:
+            safe_filename = f"{safe_name}.jpg"
+            
+        avatar_path = attendees_dir / safe_filename
+        
+        # Don't overwrite existing files
+        if avatar_path.exists():
+            return f"events/attendees/{safe_filename}"
+            
+        # Download the image
+        response = requests.get(avatar_url, timeout=10)
+        response.raise_for_status()
+        
+        # Save the image
+        with open(avatar_path, 'wb') as f:
+            f.write(response.content)
+            
+        return f"events/attendees/{safe_filename}"
+        
+    except Exception as e:
+        print(f"      ⚠️  Failed to download avatar for {filename}: {e}")
+        return ""
+
+
+def extract_attendees(page: Page, event_url: str) -> list:
+    """
+    Extract attendee information including names, host status, avatars, and guest counts.
+    
+    Args:
+        page: Playwright page object
+        event_url: URL of the event page
+        
+    Returns:
+        List of attendee dictionaries with name, is_host, avatar_path, and guests
+    """
+    attendees = []
+    attendees_dir = EVENTS_DIR / "attendees"
+    
+    try:
+        print(f"      👥 Extracting attendees...")
+        
+        # Click the attendees button using CSS selector (much more reliable)
+        attendees_button = page.locator('#attendees-btn')
+        
+        if attendees_button.is_visible(timeout=3000):
+            attendees_button.click()
+            time.sleep(2)  # Wait for navigation
+            
+            # Handle paywall if present
+            try:
+                paywall_button_xpath = "/html/body/div[1]/div[3]/div/div[1]/div/div/div[1]/div[1]/div/button"
+                paywall_button = page.locator(f"xpath={paywall_button_xpath}")
+                if paywall_button.is_visible(timeout=3000):
+                    print(f"      💰 Handling paywall...")
+                    paywall_button.click()
+                    time.sleep(2)
+            except Exception:
+                pass  # No paywall or couldn't handle it
+            
+            # Scroll to make sure all attendees are loaded
+            try:
+                for _ in range(3):  # Scroll a few times
+                    page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
+                    time.sleep(1)
+            except:
+                pass
+            
+            # Extract attendee information using precise XPath structure
+            attendee_containers = None
+            attendee_count = 0
+            
+            # Use the exact attendees container XPath provided by user
+            attendees_container_xpath = "/html/body/div[1]/div[2]/div[2]/div[2]/main/div[2]/div/div[6]/div"
+            attendees_container = page.locator(f"xpath={attendees_container_xpath}")
+            
+            if attendees_container.count() > 0:
+                # Find all individual attendee containers (div[1], div[2], etc.)
+                attendee_containers = attendees_container.locator("> div")
+                attendee_count = attendee_containers.count()
+                print(f"      👥 Found {attendee_count} attendee containers using precise XPath")
+            
+            if attendee_count == 0:
+                print(f"      👥 Found {attendee_count} attendee containers")
+            
+            # Wait a bit longer for attendees to load after paywall
+            time.sleep(3)
+            
+            # Track unique attendees to avoid duplicates
+            seen_attendees = set()
+            
+            for i in range(attendee_count):
+                try:
+                    container = attendee_containers.nth(i)
+                    attendee_index = i + 1  # Convert to 1-based indexing for XPath
+                    
+                    # Extract name using precise XPath (div[1] becomes div[attendee_index])
+                    attendee_name = "Unknown"
+                    try:
+                        name_xpath = f"/html/body/div[1]/div[2]/div[2]/div[2]/main/div[2]/div/div[6]/div/div[{attendee_index}]/div/div/div/div/button/div/div/p"
+                        name_element = page.locator(f"xpath={name_xpath}")
+                        if name_element.count() > 0:
+                            attendee_name = name_element.first.inner_text().strip()
+                    except Exception:
+                        pass
+                    
+                    # Extract host status using precise XPath
+                    is_host = False
+                    try:
+                        host_xpath = f"/html/body/div[1]/div[2]/div[2]/div[2]/main/div[2]/div/div[6]/div/div[{attendee_index}]/div/div/div/div/button/div/div/div/div[1]"
+                        host_element = page.locator(f"xpath={host_xpath}")
+                        if host_element.count() > 0:
+                            host_text = host_element.first.inner_text().strip()
+                            is_host = "Event host" in host_text
+                    except Exception:
+                        pass
+                    
+                    # Extract guest information using adapted CSS selector
+                    guests = 0
+                    try:
+                        # Adapt the provided selector to work for the current attendee
+                        guest_selector = f"#page > div.flex.flex-grow.flex-col > main > div.md\\:max-w-screen.z-10.mb-5.w-full.sm\\:my-4.sm\\:px-5.md\\:w-\\[750px\\].md\\:w-\\[600px\\] > div > div:nth-child(6) > div > div:nth-child({attendee_index}) > div > div.w-full.items-center.rounded-2xl.px-6.py-4.shadow-\\[0px_0px_10px_0px_rgba\\(0\\,0\\,0\\,0\\.12\\)\\] > div > div > button > div > div > div.flex.gap-1.text-sm > div"
+                        guest_element = page.locator(guest_selector)
+                        if guest_element.count() > 0:
+                            guest_text = guest_element.first.inner_text().strip()
+                            # Look for guest indicators like "+1", "plus 1", "guest", etc.
+                            import re
+                            guest_patterns = [
+                                r'\+(\d+)',  # "+1", "+2", etc.
+                                r'plus\s+(\d+)',  # "plus 1", "plus 2"
+                                r'(\d+)\s+guest',  # "1 guest", "2 guests"
+                                r'bringing\s+(\d+)',  # "bringing 1", "bringing 2"
+                            ]
+                            
+                            for pattern in guest_patterns:
+                                match = re.search(pattern, guest_text, re.IGNORECASE)
+                                if match:
+                                    guests = int(match.group(1))
+                                    break
+                            
+                            # If no number found but text contains guest-related words, assume 1
+                            if guests == 0 and any(word in guest_text.lower() for word in ['guest', 'plus', '+', 'bringing']):
+                                guests = 1
+                    except Exception:
+                        pass
+                    
+                    # Skip if we already have this attendee (deduplicate)
+                    attendee_key = f"{attendee_name}_{is_host}"
+                    if attendee_key in seen_attendees:
+                        print(f"      ⚠️  Skipped duplicate: {attendee_name}")
+                        continue
+                    
+                    # Extract avatar using precise XPath
+                    avatar_path = ""
+                    try:
+                        avatar_xpath = f"/html/body/div[1]/div[2]/div[2]/div[2]/main/div[2]/div/div[6]/div/div[{attendee_index}]/div/div/div/div/button/div/picture/img"
+                        avatar_img = page.locator(f"xpath={avatar_xpath}")
+                        if avatar_img.count() > 0:
+                            avatar_url = avatar_img.first.get_attribute('src')
+                            if avatar_url:
+                                avatar_path = download_avatar(avatar_url, attendee_name, attendees_dir)
+                    except Exception:
+                        pass
+                    
+                    # Only add if we got a valid name
+                    if attendee_name and attendee_name != "Unknown" and len(attendee_name) > 2:
+                        attendee_data = {
+                            "name": attendee_name,
+                            "is_host": is_host,
+                            "avatar_path": avatar_path,
+                            "guests": guests
+                        }
+                        
+                        attendees.append(attendee_data)
+                        seen_attendees.add(attendee_key)
+                        guest_info = f" (+{guests} guest{'s' if guests != 1 else ''})" if guests > 0 else ""
+                        print(f"      ✅ Attendee {len(attendees)}: {attendee_name}" + (" (Host)" if is_host else "") + guest_info)
+                    else:
+                        print(f"      ⚠️  Skipped container {i+1} - invalid name: {attendee_name}")
+                    
+                except Exception as e:
+                    print(f"      ⚠️  Error extracting attendee {i+1}: {e}")
+                    continue
+                    
+        else:
+            print(f"      ⚠️  Attendees button not found")
+            
+    except Exception as e:
+        print(f"      ⚠️  Error extracting attendees: {e}")
+    
+    return attendees
 
 
 def extract_event_details(page: Page, event_url: str, return_url: str) -> tuple:
     """
-    Visit an individual event page and extract location and details.
+    Visit an individual event page and extract location, details, and attendees.
     
     Args:
         page: Playwright page object
@@ -135,7 +357,7 @@ def extract_event_details(page: Page, event_url: str, return_url: str) -> tuple:
         return_url: URL to return to after extraction
         
     Returns:
-        Tuple of (location, details)
+        Tuple of (location, details, attendees)
     """
     try:
         print(f"      🔍 Visiting event page...")
@@ -214,11 +436,14 @@ def extract_event_details(page: Page, event_url: str, return_url: str) -> tuple:
         if not details:
             details = "Details not found"
         
+        # Extract attendees information
+        attendees = extract_attendees(page, event_url)
+        
         # Navigate back to the events list page
         page.goto(return_url, wait_until="domcontentloaded", timeout=30000)
         time.sleep(1)  # Brief wait for page to load
         
-        return location, details
+        return location, details, attendees
         
     except Exception as e:
         print(f"      ⚠️  Error extracting event details: {e}")
@@ -228,20 +453,22 @@ def extract_event_details(page: Page, event_url: str, return_url: str) -> tuple:
             time.sleep(1)
         except:
             pass
-        return "Location not found", "Details not found"
+        return "Location not found", "Details not found", []
 
 
 def scrape_events(page: Page, max_events: int) -> list:
     """
     Scrape event data from the loaded page, excluding cancelled events.
-    Visits each individual event page to extract detailed information.
+    Visits each individual event page to extract detailed information and attendees.
     
     Args:
         page: Playwright page object
         max_events: Maximum number of non-cancelled events to scrape
         
     Returns:
-        List of event dictionaries: {id, url, name, date, attendees, location, details}
+        List of event dictionaries: {id, url, name, date, attendees, location, details, attendees_list}
+        Each attendee in attendees_list includes: {name, is_host, avatar_path, guests}
+        The attendees field is calculated as "X members + Y guests = Z total" based on actual data
     """
     print(f"🔍 Scraping event data (excluding cancelled events)...")
     
@@ -250,154 +477,105 @@ def scrape_events(page: Page, max_events: int) -> list:
     # Save the current events list URL for returning to after visiting individual events
     events_list_url = page.url
     
-    # Find all event links  
-    event_links = page.locator('a[href*="/events/"]').all()
+    # Find all event cards using CSS selector
+    event_cards = page.locator('[id^="past-event-card-ep-"]')
+    event_count = event_cards.count()
     
-    print(f"🔍 Found {len(event_links)} event links to process...")
+    print(f"🔍 Found {event_count} event cards to process...")
     
     processed_count = 0
-    for i, link in enumerate(event_links):
+    
+    for i in range(event_count):
+        if len(events) >= max_events:
+            break
+            
         try:
+            event_card = event_cards.nth(i)
             processed_count += 1
             
-            # Get event URL
-            event_url = link.get_attribute('href')
-            if event_url and not event_url.startswith('http'):
-                event_url = f"https://www.meetup.com{event_url}"
-            
-            # Extract event ID from URL (the number after /events/)
-            import re
-            id_match = re.search(r'/events/(\d+)', event_url)
-            if not id_match:
-                continue  # Skip if no valid event ID
-                
-            event_id = id_match.group(1)
-            
-            # Check if event is cancelled - look in container for "Cancelled" text
-            container = link.locator('xpath=../..').first
+            # Extract event URL from the card (it should be clickable/have href)
+            event_url = ""
             try:
-                container_text = container.inner_text()
-                if 'cancelled' in container_text.lower():
-                    print(f"   ⏭️  Skipping cancelled event {event_id}")
-                    continue  # Skip cancelled events
+                # The card itself might be a link, or contain a link
+                card_link = event_card.locator('a').first
+                if card_link.count() > 0:
+                    event_url = card_link.get_attribute('href')
+                    if event_url and not event_url.startswith('http'):
+                        event_url = f"https://www.meetup.com{event_url}"
+                else:
+                    # Try getting href from the card itself if it's a link
+                    href = event_card.get_attribute('href')
+                    if href:
+                        event_url = href if href.startswith('http') else f"https://www.meetup.com{href}"
             except Exception:
                 pass
             
-            # Get event name - need to extract just the title, not all the link text
+            if not event_url:
+                print(f"   ⚠️  Skipped card {i+1} - could not extract URL")
+                continue
+            
+            # Extract event title using CSS selector
             event_name = ""
-            
-            # Try to find the actual event title in the link or nearby elements
             try:
-                # Strategy 1: Look for the event title in a heading within the link's container
-                headings = container.locator('h1, h2, h3, h4, h5, h6').all()
-                
-                for heading in headings:
-                    heading_text = heading.inner_text().strip()
-                    # Skip if it's just a date or very short
-                    if (heading_text and 
-                        len(heading_text) > 10 and 
-                        not heading_text.upper().startswith(('MON', 'TUE', 'WED', 'THU', 'FRI', 'SAT', 'SUN')) and
-                        ':' in heading_text):  # Event names often have colons
-                        event_name = heading_text
-                        break
-                
-                # Strategy 2: If no good heading found, try to extract from link text but clean it up
-                if not event_name:
-                    link_text = link.inner_text().strip()
-                    if link_text:
-                        # Split by newlines and look for the longest meaningful line
-                        lines = [line.strip() for line in link_text.split('\n') if line.strip()]
-                        for line in lines:
-                            # Skip date lines, status lines, etc.
-                            if (len(line) > 10 and 
-                                not line.upper().startswith(('MON', 'TUE', 'WED', 'THU', 'FRI', 'SAT', 'SUN')) and
-                                'attendee' not in line.lower() and
-                                'event has passed' not in line.lower() and
-                                'cancelled' not in line.lower() and
-                                ':' in line):
-                                event_name = line
-                                break
-                        
-                        # If still no good name found, take the longest line that's not a date
-                        if not event_name:
-                            longest_line = ""
-                            for line in lines:
-                                if (len(line) > len(longest_line) and 
-                                    not line.upper().startswith(('MON', 'TUE', 'WED', 'THU', 'FRI', 'SAT', 'SUN')) and
-                                    'cancelled' not in line.lower()):
-                                    longest_line = line
-                            event_name = longest_line
-                
+                title_element = event_card.locator('div.flex.flex-col.space-y-5.overflow-hidden > div > div > span')
+                if title_element.count() > 0:
+                    event_name = title_element.first.inner_text().strip()
             except Exception:
                 pass
             
-            if not event_name or len(event_name) < 3:
-                continue  # Skip if no meaningful name
-            
-            # Find date - look in parent containers
+            # Extract event date using CSS selector
             date_string = ""
-            
             try:
-                # Look for time elements
-                time_elements = container.locator('time').all()
-                for time_elem in time_elements:
-                    date_text = time_elem.inner_text().strip()
-                    if date_text and len(date_text) > 5:
-                        date_string = date_text
-                        break
-                
-                # If no time element found, look for date patterns in container text
-                if not date_string:
-                    container_text = container.inner_text()
-                    date_patterns = [
-                        r'[A-Z][a-z]{2},\s+[A-Z][a-z]{2}\s+\d{1,2},\s+\d{4}[^0-9]*\d{1,2}:\d{2}\s+[AP]M\s+[A-Z]{3}',  # Full format
-                        r'[A-Z][a-z]{2},\s+[A-Z][a-z]{2}\s+\d{1,2},\s+\d{4}',  # Date only
-                    ]
-                    
-                    for pattern in date_patterns:
-                        match = re.search(pattern, container_text)
-                        if match:
-                            date_string = match.group()
-                            break
-            except:
-                pass
-            
-            if not date_string:
-                date_string = "Date not found"
-            
-            # Find attendee count
-            attendees = ""
-            try:
-                container_text = container.inner_text()
-                # Look for patterns like "12 attendees", "1 attendee", "No attendees"
-                attendee_patterns = [
-                    r'\d+\s+attendees?',  # "12 attendees" or "1 attendee"
-                    r'No\s+attendees?',   # "No attendees"
-                ]
-                
-                for pattern in attendee_patterns:
-                    match = re.search(pattern, container_text, re.IGNORECASE)
-                    if match:
-                        attendees = match.group()
-                        break
+                date_element = event_card.locator('div.flex.flex-col.space-y-5.overflow-hidden > div > div > time')
+                if date_element.count() > 0:
+                    date_string = date_element.first.inner_text().strip()
             except Exception:
                 pass
             
-            if not attendees:
-                attendees = "Attendees not found"
+            # Skip if we couldn't get basic info
+            if not event_name or not event_url:
+                print(f"   ⚠️  Skipped card {i+1} - missing basic info (name: {bool(event_name)}, url: {bool(event_url)})")
+                continue
+            
+            # Check if event is cancelled by looking at the title or attendee text
+            container_text = event_card.inner_text().lower()
+            if 'cancelled' in container_text:
+                print(f"   ⚠️  Skipped cancelled event: {event_name[:50]}...")
+                continue
+            
+            # Extract event ID from URL
+            event_id = ""
+            try:
+                match = re.search(r'/events/(\d+)', event_url)
+                if match:
+                    event_id = match.group(1)
+            except Exception:
+                pass
             
             # Extract detailed information from the individual event page
             print(f"   🔍 [{len(events)+1}/{max_events}] {event_name[:50]}...")
-            location, details = extract_event_details(page, event_url, events_list_url)
+            location, details, attendees_list = extract_event_details(page, event_url, events_list_url)
+            
+            # Calculate total attendees (members + guests) from actual data
+            total_members = len(attendees_list)
+            total_guests = sum(attendee.get('guests', 0) for attendee in attendees_list)
+            total_attendees = total_members + total_guests
+            
+            # Format attendees summary
+            if total_guests > 0:
+                attendees_summary = f"{total_members} members + {total_guests} guests = {total_attendees} total"
+            else:
+                attendees_summary = f"{total_members} members"
             
             event_data = {
                 "id": event_id,
                 "url": event_url,
                 "name": event_name,
                 "date": date_string,
-                "attendees": attendees,
+                "attendees": attendees_summary,
                 "location": location,
-                "details": details
+                "details": details,
+                "attendees_list": attendees_list
             }
             
             events.append(event_data)
@@ -406,24 +584,24 @@ def scrape_events(page: Page, max_events: int) -> list:
             # Stop if we have enough non-cancelled events
             if len(events) >= max_events:
                 break
-            
+                
         except Exception as e:
-            print(f"⚠️  Error scraping event {processed_count}: {e}")
+            print(f"   ⚠️  Error processing event card {i+1}: {e}")
             continue
     
     print(f"✅ Scraped {len(events)} valid events (processed {processed_count} total)")
     return events
 
 
-def parse_date_to_folder_name(date_string: str) -> str:
+def parse_date_to_iso_format(date_string: str) -> str:
     """
-    Parse date string and convert to folder format YYYY_MM_DD.
+    Parse date string and convert to ISO format YYYY-MM-DD.
     
     Args:
         date_string: Date like "WED, JUL 16, 2025, 10:00 AM BST"
         
     Returns:
-        Formatted date string like "2025_07_16"
+        Formatted date string like "2025-07-16"
     """
     try:
         # Extract date parts using regex
@@ -442,7 +620,7 @@ def parse_date_to_folder_name(date_string: str) -> str:
             month = months.get(month_abbr, '01')
             day = day.zfill(2)  # Pad with zero if needed
             
-            return f"{year}_{month}_{day}"
+            return f"{year}-{month}-{day}"
     except Exception:
         pass
     
@@ -459,9 +637,10 @@ def save_event_data(event_data: dict) -> None:
         event_data: Dictionary containing event information {id, url, name, date}
     """
     try:
-        # Create directory name from date
-        date_folder = parse_date_to_folder_name(event_data['date'])
-        event_dir = EVENTS_DIR / f"event_{date_folder}"
+        # Create directory name from ISO date and event ID
+        iso_date = parse_date_to_iso_format(event_data['date'])
+        event_id = event_data['id']
+        event_dir = EVENTS_DIR / f"{iso_date}_{event_id}"
         event_dir.mkdir(exist_ok=True)
         
         # Save data.json
@@ -554,8 +733,9 @@ def main(group_name: str, headless: bool, max_events: int):
             print(f"\n💾 Saving {len(events)} events...")
             for i, event in enumerate(events):
                 save_event_data(event)
-                date_folder = parse_date_to_folder_name(event['date'])
-                print(f"   Saved event {i+1}/{len(events)}: event_{date_folder}")
+                iso_date = parse_date_to_iso_format(event['date'])
+                event_id = event['id']
+                print(f"   Saved event {i+1}/{len(events)}: {iso_date}_{event_id}")
             
             print(f"\n✅ All events saved to {EVENTS_DIR}")
             print("Press ENTER when you're done to close the browser...")
