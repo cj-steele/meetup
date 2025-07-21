@@ -125,20 +125,130 @@ def scroll_to_load_events(page: Page, max_events: int) -> None:
 
 
 
+def extract_event_details(page: Page, event_url: str, return_url: str) -> tuple:
+    """
+    Visit an individual event page and extract location and details.
+    
+    Args:
+        page: Playwright page object
+        event_url: URL of the individual event page
+        return_url: URL to return to after extraction
+        
+    Returns:
+        Tuple of (location, details)
+    """
+    try:
+        print(f"      🔍 Visiting event page...")
+        page.goto(event_url, wait_until="domcontentloaded", timeout=30000)
+        time.sleep(2)  # Wait for page to load
+        
+                # Extract location
+        location = ""
+        try:
+            # Use the specific XPath provided by user for location
+            location_xpath = "/html/body/div[1]/div[2]/div[2]/div[2]/div/main/div[3]/div[1]/div/div[2]/div[2]/div[2]/div/div[1]/div[3]/div/div[2]"
+            location_elem = page.locator(f"xpath={location_xpath}")
+            
+            if location_elem.is_visible(timeout=3000):
+                location = location_elem.inner_text().strip()
+            
+            # Fallback to other selectors if XPath doesn't work
+            if not location:
+                location_selectors = [
+                    '[data-testid="event-location"]',
+                    '[data-testid="venue-info"]',
+                    '.venueDisplay',
+                    '.event-location',
+                    '.venue-info',
+                    '[class*="location"]',
+                    '[class*="venue"]'
+                ]
+                
+                for selector in location_selectors:
+                    try:
+                        location_elem = page.locator(selector).first
+                        if location_elem.is_visible(timeout=1000):
+                            location = location_elem.inner_text().strip()
+                            if location and len(location) > 5 and len(location) < 200:
+                                break
+                    except:
+                        continue
+                        
+        except Exception:
+            pass
+            
+        if not location:
+            location = "Location not found"
+        
+        # Extract details from the Details section
+        details = ""
+        try:
+            # Use the specific XPath provided by user for details
+            details_xpath = "/html/body/div[1]/div[2]/div[2]/div[2]/div/main/div[3]/div[1]/div/div[1]/div[1]/div[2]/div[2]"
+            details_elem = page.locator(f"xpath={details_xpath}")
+            
+            if details_elem.is_visible(timeout=3000):
+                details = details_elem.inner_text().strip()
+            
+            # Fallback to other selectors if XPath doesn't work
+            if not details:
+                details_selectors = [
+                    '[data-testid="event-description"]',
+                    '.event-description',
+                    '.description',
+                    '[class*="description"]',
+                    '#details',
+                    '.event-details'
+                ]
+                
+                for selector in details_selectors:
+                    details_elem = page.locator(selector).first
+                    if details_elem.is_visible(timeout=2000):
+                        details = details_elem.inner_text().strip()
+                        if details and len(details) > 50:  # Make sure it's substantial content
+                            break
+                
+        except Exception:
+            pass
+            
+        if not details:
+            details = "Details not found"
+        
+        # Navigate back to the events list page
+        page.goto(return_url, wait_until="domcontentloaded", timeout=30000)
+        time.sleep(1)  # Brief wait for page to load
+        
+        return location, details
+        
+    except Exception as e:
+        print(f"      ⚠️  Error extracting event details: {e}")
+        # Try to return to events page even if extraction failed
+        try:
+            page.goto(return_url, wait_until="domcontentloaded", timeout=30000)
+            time.sleep(1)
+        except:
+            pass
+        return "Location not found", "Details not found"
+
+
 def scrape_events(page: Page, max_events: int) -> list:
     """
     Scrape event data from the loaded page, excluding cancelled events.
+    Visits each individual event page to extract detailed information.
     
     Args:
         page: Playwright page object
         max_events: Maximum number of non-cancelled events to scrape
         
     Returns:
-        List of event dictionaries matching the format: {id, url, name, date}
+        List of event dictionaries: {id, url, name, date, attendees, location, details}
     """
     print(f"🔍 Scraping event data (excluding cancelled events)...")
     
     events = []
+    
+    # Save the current events list URL for returning to after visiting individual events
+    events_list_url = page.url
     
     # Find all event links  
     event_links = page.locator('a[href*="/events/"]').all()
@@ -255,15 +365,43 @@ def scrape_events(page: Page, max_events: int) -> list:
             if not date_string:
                 date_string = "Date not found"
             
+            # Find attendee count
+            attendees = ""
+            try:
+                container_text = container.inner_text()
+                # Look for patterns like "12 attendees", "1 attendee", "No attendees"
+                attendee_patterns = [
+                    r'\d+\s+attendees?',  # "12 attendees" or "1 attendee"
+                    r'No\s+attendees?',   # "No attendees"
+                ]
+                
+                for pattern in attendee_patterns:
+                    match = re.search(pattern, container_text, re.IGNORECASE)
+                    if match:
+                        attendees = match.group()
+                        break
+            except Exception:
+                pass
+            
+            if not attendees:
+                attendees = "Attendees not found"
+            
+            # Extract detailed information from the individual event page
+            print(f"   🔍 [{len(events)+1}/{max_events}] {event_name[:50]}...")
+            location, details = extract_event_details(page, event_url, events_list_url)
+            
             event_data = {
                 "id": event_id,
                 "url": event_url,
                 "name": event_name,
-                "date": date_string
+                "date": date_string,
+                "attendees": attendees,
+                "location": location,
+                "details": details
             }
             
             events.append(event_data)
-            print(f"   ✅ [{len(events)}/{max_events}] {event_name[:50]}...")
+            print(f"      ✅ Event {len(events)} complete!")
             
             # Stop if we have enough non-cancelled events
             if len(events) >= max_events:
