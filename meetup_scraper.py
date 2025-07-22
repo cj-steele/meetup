@@ -117,6 +117,18 @@ def scroll_to_load_events(page: Page, max_events: int):
         
         print(f"   Found {current_count} event cards...")
         
+        # If we find 0 events, debug what's on the page
+        if current_count == 0 and scroll_attempts == 0:
+            page_text = page.inner_text('body').lower()
+            print(f"   🔍 Debugging 0 events - Page title: {page.title()}")
+            print(f"   🔍 Current URL: {page.url}")
+            if 'login' in page_text or 'sign in' in page_text:
+                print("   ⚠️  Page contains login content - authentication required!")
+                return 0
+            if 'no events' in page_text or 'no upcoming events' in page_text or 'no past events' in page_text:
+                print("   ℹ️  Page indicates no events available")
+                return 0
+        
         # Stop if we have enough events or no new events loaded
         if current_count >= max_events or current_count == previous_count:
             break
@@ -222,19 +234,20 @@ def extract_attendees(page: Page, event_url: str) -> list:
             except:
                 pass
             
-            # Extract attendee information using precise XPath structure
+            # Extract attendee information using CSS selector structure
             attendee_containers = None
             attendee_count = 0
             
-            # Use the exact attendees container XPath provided by user
-            attendees_container_xpath = "/html/body/div[1]/div[2]/div[2]/div[2]/main/div[2]/div/div[6]/div"
-            attendees_container = page.locator(f"xpath={attendees_container_xpath}")
+            # Use CSS selector to find all attendee button containers
+            # Base selector path to the attendees list area
+            attendees_base_selector = "#page > div.flex.flex-grow.flex-col > main > div.md\\:max-w-screen.z-10.mb-5.w-full.sm\\:my-4.sm\\:px-5.md\\:w-\\[750px\\].md\\:w-\\[600px\\] > div > div:nth-child(6) > div"
+            attendees_container = page.locator(attendees_base_selector)
             
             if attendees_container.count() > 0:
-                # Find all individual attendee containers (div[1], div[2], etc.)
+                # Find all individual attendee containers 
                 attendee_containers = attendees_container.locator("> div")
                 attendee_count = attendee_containers.count()
-                print(f"      👥 Found {attendee_count} attendee containers using precise XPath")
+                print(f"      👥 Found {attendee_count} attendee containers using CSS selector")
             
             if attendee_count == 0:
                 print(f"      👥 Found {attendee_count} attendee containers")
@@ -248,54 +261,50 @@ def extract_attendees(page: Page, event_url: str) -> list:
             for i in range(attendee_count):
                 try:
                     container = attendee_containers.nth(i)
-                    attendee_index = i + 1  # Convert to 1-based indexing for XPath
                     
-                    # Extract name using precise XPath (div[1] becomes div[attendee_index])
+                    # Extract name using CSS selector within the container
                     attendee_name = "Unknown"
                     try:
-                        name_xpath = f"/html/body/div[1]/div[2]/div[2]/div[2]/main/div[2]/div/div[6]/div/div[{attendee_index}]/div/div/div/div/button/div/div/p"
-                        name_element = page.locator(f"xpath={name_xpath}")
+                        # Look for the name within this container
+                        name_element = container.locator("div > div > div > div > button > div > div > p")
                         if name_element.count() > 0:
                             attendee_name = name_element.first.inner_text().strip()
                     except Exception:
                         pass
                     
-                    # Extract host status using precise XPath
+                    # Extract host status using CSS selector within the container
                     is_host = False
                     try:
-                        host_xpath = f"/html/body/div[1]/div[2]/div[2]/div[2]/main/div[2]/div/div[6]/div/div[{attendee_index}]/div/div/div/div/button/div/div/div/div[1]"
-                        host_element = page.locator(f"xpath={host_xpath}")
+                        # Look for host marker within this container
+                        host_element = container.locator("div > div > div > div > button > div > div > div > div:first-child")
                         if host_element.count() > 0:
                             host_text = host_element.first.inner_text().strip()
                             is_host = "Event host" in host_text
                     except Exception:
                         pass
                     
-                    # Extract guest information using adapted CSS selector
+                    # Extract guest information from container text
                     guests = 0
                     try:
-                        # Adapt the provided selector to work for the current attendee
-                        guest_selector = f"#page > div.flex.flex-grow.flex-col > main > div.md\\:max-w-screen.z-10.mb-5.w-full.sm\\:my-4.sm\\:px-5.md\\:w-\\[750px\\].md\\:w-\\[600px\\] > div > div:nth-child(6) > div > div:nth-child({attendee_index}) > div > div.w-full.items-center.rounded-2xl.px-6.py-4.shadow-\\[0px_0px_10px_0px_rgba\\(0\\,0\\,0\\,0\\.12\\)\\] > div > div > button > div > div > div.flex.gap-1.text-sm > div"
-                        guest_element = page.locator(guest_selector)
-                        if guest_element.count() > 0:
-                            guest_text = guest_element.first.inner_text().strip()
-                            # Look for guest indicators like "+1", "plus 1", "guest", etc.
-                            import re
-                            guest_patterns = [
-                                r'\+(\d+)',  # "+1", "+2", etc.
-                                r'plus\s+(\d+)',  # "plus 1", "plus 2"
-                                r'(\d+)\s+guest',  # "1 guest", "2 guests"
-                                r'bringing\s+(\d+)',  # "bringing 1", "bringing 2"
-                            ]
-                            
-                            for pattern in guest_patterns:
-                                match = re.search(pattern, guest_text, re.IGNORECASE)
-                                if match:
-                                    guests = int(match.group(1))
-                                    break
-                            
-                            # If no number found but text contains guest-related words, assume 1
-                            if guests == 0 and any(word in guest_text.lower() for word in ['guest', 'plus', '+', 'bringing']):
+                        # Get all text from this attendee container
+                        container_text = container.inner_text()
+                        
+                        # Look for guest indicators like "+1", "plus 1", "guest", etc.
+                        guest_patterns = [
+                            r'\+(\d+)',  # "+1", "+2", etc.
+                            r'plus\s+(\d+)',  # "plus 1", "plus 2"
+                            r'(\d+)\s+guest',  # "1 guest", "2 guests"
+                            r'bringing\s+(\d+)',  # "bringing 1", "bringing 2"
+                        ]
+                        
+                        for pattern in guest_patterns:
+                            match = re.search(pattern, container_text, re.IGNORECASE)
+                            if match:
+                                guests = int(match.group(1))
+                                break
+                        
+                        # If no number found but text contains guest-related words, assume 1
+                        if guests == 0 and any(word in container_text.lower() for word in ['guest', 'plus', '+', 'bringing']):
                                 guests = 1
                     except Exception:
                         pass
@@ -306,11 +315,11 @@ def extract_attendees(page: Page, event_url: str) -> list:
                         print(f"      ⚠️  Skipped duplicate: {attendee_name}")
                         continue
                     
-                    # Extract avatar using precise XPath
+                    # Extract avatar using CSS selector within the container
                     avatar_path = ""
                     try:
-                        avatar_xpath = f"/html/body/div[1]/div[2]/div[2]/div[2]/main/div[2]/div/div[6]/div/div[{attendee_index}]/div/div/div/div/button/div/picture/img"
-                        avatar_img = page.locator(f"xpath={avatar_xpath}")
+                        # Look for avatar image within this container
+                        avatar_img = container.locator("div > div > div > div > button > div > picture > img")
                         if avatar_img.count() > 0:
                             avatar_url = avatar_img.first.get_attribute('src')
                             if avatar_url:
@@ -552,6 +561,8 @@ def scrape_events(page: Page, max_events: int) -> list:
             except Exception:
                 pass
             
+            print(f"      🔍 Event ID: {event_id}, Date: {date_string}")
+            
             # Extract detailed information from the individual event page
             print(f"   🔍 [{len(events)+1}/{max_events}] {event_name[:50]}...")
             location, details, attendees_list = extract_event_details(page, event_url, events_list_url)
@@ -732,10 +743,17 @@ def main(group_name: str, headless: bool, max_events: int):
             # Save each event
             print(f"\n💾 Saving {len(events)} events...")
             for i, event in enumerate(events):
-                save_event_data(event)
                 iso_date = parse_date_to_iso_format(event['date'])
                 event_id = event['id']
-                print(f"   Saved event {i+1}/{len(events)}: {iso_date}_{event_id}")
+                directory_name = f"{iso_date}_{event_id}"
+                
+                # Check if directory already exists
+                event_dir = EVENTS_DIR / directory_name
+                if event_dir.exists():
+                    print(f"   ⚠️  Directory {directory_name} already exists - overwriting...")
+                
+                save_event_data(event)
+                print(f"   Saved event {i+1}/{len(events)}: {directory_name}")
             
             print(f"\n✅ All events saved to {EVENTS_DIR}")
             print("Press ENTER when you're done to close the browser...")
