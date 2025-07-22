@@ -590,14 +590,27 @@ def scrape_events(page: Page, max_events: int) -> list:
             }
             
             events.append(event_data)
-            print(f"      ✅ Event {len(events)} complete!")
+            
+            # Save immediately after processing each event
+            try:
+                save_event_data(event_data)
+                iso_date = parse_date_to_iso_format(event_data['date'])
+                event_id = event_data['id']
+                directory_name = f"{iso_date}_{event_id}"
+                print(f"      ✅ Event {len(events)} complete and saved: {directory_name}")
+                print(f"      📊 Progress: {len(events)}/{max_events} events collected")
+            except Exception as e:
+                print(f"      ⚠️  Event {len(events)} complete but save failed: {e}")
+                print(f"      📊 Progress: {len(events)}/{max_events} events collected")
             
             # Stop if we have enough non-cancelled events
             if len(events) >= max_events:
+                print(f"      🎯 Reached target of {max_events} events - stopping")
                 break
                 
         except Exception as e:
             print(f"   ⚠️  Error processing event card {i+1}: {e}")
+            print(f"   📊 Continuing to next event... (current progress: {len(events)}/{max_events})")
             continue
     
     print(f"✅ Scraped {len(events)} valid events (processed {processed_count} total)")
@@ -740,22 +753,7 @@ def main(group_name: str, headless: bool, max_events: int):
             # Scrape event data
             events = scrape_events(page, max_events)
             
-            # Save each event
-            print(f"\n💾 Saving {len(events)} events...")
-            for i, event in enumerate(events):
-                iso_date = parse_date_to_iso_format(event['date'])
-                event_id = event['id']
-                directory_name = f"{iso_date}_{event_id}"
-                
-                # Check if directory already exists
-                event_dir = EVENTS_DIR / directory_name
-                if event_dir.exists():
-                    print(f"   ⚠️  Directory {directory_name} already exists - overwriting...")
-                
-                save_event_data(event)
-                print(f"   Saved event {i+1}/{len(events)}: {directory_name}")
-            
-            print(f"\n✅ All events saved to {EVENTS_DIR}")
+            print(f"\n✅ All {len(events)} events processed and saved to {EVENTS_DIR}")
             print("Press ENTER when you're done to close the browser...")
             
             input()
