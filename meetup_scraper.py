@@ -6,7 +6,6 @@ A command line tool to access past events for a specific Meetup group.
 Handles login detection and session persistence with comprehensive data extraction.
 """
 
-import sys
 import time
 import json
 import re
@@ -18,7 +17,7 @@ from typing import List, Dict, Optional, Tuple
 from pathlib import Path
 
 import click
-from playwright.sync_api import sync_playwright, Page, Browser, BrowserContext
+from playwright.sync_api import sync_playwright, Page, BrowserContext
 
 
 # =============================================================================
