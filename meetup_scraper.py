@@ -414,30 +414,35 @@ def extract_event_details(page: Page, event_url: str, return_url: str) -> tuple:
         # Extract details from the Details section
         details = ""
         try:
-            # Use the specific XPath provided by user for details
-            details_xpath = "/html/body/div[1]/div[2]/div[2]/div[2]/div/main/div[3]/div[1]/div/div[1]/div[1]/div[2]/div[2]"
-            details_elem = page.locator(f"xpath={details_xpath}")
+            # Use CSS selector for details (more reliable than XPath)
+            details_elem = page.locator("#event-details > div.break-words")
             
-            if details_elem.is_visible(timeout=3000):
+            if details_elem.count() > 0 and details_elem.is_visible(timeout=3000):
                 details = details_elem.inner_text().strip()
             
-            # Fallback to other selectors if XPath doesn't work
+            # Fallback to other selectors if primary doesn't work
             if not details:
                 details_selectors = [
+                    "#event-details",
                     '[data-testid="event-description"]',
                     '.event-description',
                     '.description',
                     '[class*="description"]',
                     '#details',
-                    '.event-details'
+                    '.event-details',
+                    # XPath as last resort
+                    "xpath=/html/body/div[1]/div[2]/div[2]/div[2]/div/main/div[3]/div[1]/div/div[1]/div[1]/div[2]/div[2]"
                 ]
                 
                 for selector in details_selectors:
-                    details_elem = page.locator(selector).first
-                    if details_elem.is_visible(timeout=2000):
-                        details = details_elem.inner_text().strip()
-                        if details and len(details) > 50:  # Make sure it's substantial content
-                            break
+                    try:
+                        details_elem = page.locator(selector)
+                        if details_elem.count() > 0 and details_elem.is_visible(timeout=2000):
+                            details = details_elem.inner_text().strip()
+                            if details and len(details) > 50:  # Make sure it's substantial content
+                                break
+                    except:
+                        continue
                 
         except Exception:
             pass
