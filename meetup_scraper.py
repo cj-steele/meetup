@@ -12,6 +12,7 @@ import re
 import logging
 from datetime import datetime
 from dateutil.parser import parse as dateutil_parse
+from pathvalidate import sanitize_filename
 from dataclasses import dataclass, asdict
 from typing import List, Dict, Optional, Tuple
 from pathlib import Path
@@ -130,48 +131,7 @@ class DirectoryManager:
 
 
 
-class FilenameUtils:
-    """Utilities for handling filenames."""
-    
-    @staticmethod
-    def sanitize_filename(filename: str) -> str:
-        """Make filename filesystem-safe."""
-        safe_name = re.sub(r'[^\w\s-]', '', filename).strip()
-        return re.sub(r'[-\s]+', '-', safe_name)
-    
-    @staticmethod
-    def make_filename_safe(name: str) -> str:
-        """
-        Make event name safe for use as filename on all operating systems.
-        
-        Args:
-            name: Original event name
-            
-        Returns:
-            Filename-safe version of the name
-        """
-        # Replace colon with dash (main issue in event names)
-        safe_name = name.replace(':', ' -')
-        
-        # Replace any other problematic characters for cross-platform compatibility
-        # Remove/replace: < > " | ? * \ and control characters
-        forbidden_chars = r'[<>"|?*\\]'
-        safe_name = re.sub(forbidden_chars, '', safe_name)
-        
-        # Replace control characters and other problematic chars
-        safe_name = re.sub(r'[\x00-\x1f\x7f]', '', safe_name)
-        
-        # Clean up multiple spaces and trim
-        safe_name = re.sub(r'\s+', ' ', safe_name).strip()
-        
-        # Ensure it doesn't end with a period (Windows issue)
-        safe_name = safe_name.rstrip('.')
-        
-        # Truncate if too long (keep under 200 chars to be safe)
-        if len(safe_name) > 200:
-            safe_name = safe_name[:200].rstrip()
-        
-        return safe_name
+
 
 
 # =============================================================================
@@ -704,7 +664,7 @@ class EventScraper:
                 today = datetime.now()
                 iso_date = f"{today.year}-{today.month:02d}-{today.day:02d}"
             directory_name = f"{iso_date}"
-            safe_filename = FilenameUtils.make_filename_safe(event_data.name)
+            safe_filename = sanitize_filename(event_data.name)
             status = " (CANCELLED)" if event_data.cancelled else ""
             
             self.logger.info(f"      ✅ Event {event_num} complete and saved: {directory_name}/{safe_filename}.json{status}")
@@ -748,8 +708,8 @@ class FileManager:
             event_dir = self.config.events_dir / f"{iso_date}"
             event_dir.mkdir(exist_ok=True)
             
-            # Make filename safe for all operating systems
-            safe_name = FilenameUtils.make_filename_safe(event_data.name)
+            # Make filename safe for all operating systems using pathvalidate
+            safe_name = sanitize_filename(event_data.name)
             data_file = event_dir / f"{safe_name}.json"
             
             with open(data_file, 'w', encoding='utf-8') as f:
