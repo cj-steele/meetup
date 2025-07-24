@@ -11,6 +11,7 @@ import json
 import re
 import logging
 from datetime import datetime
+from dateutil.parser import parse as dateutil_parse
 from dataclasses import dataclass, asdict
 from typing import List, Dict, Optional, Tuple
 from pathlib import Path
@@ -64,7 +65,7 @@ class EventData:
     name: str
     date: str
     attendees: int
-    host: str  # New field for event host
+    host: str
     location: str
     details: str
     cancelled: bool
@@ -127,18 +128,12 @@ class DirectoryManager:
 
 
 class DateParser:
-    """Handles date parsing and formatting."""
-    
-    MONTH_MAP = {
-        'JAN': '01', 'FEB': '02', 'MAR': '03', 'APR': '04',
-        'MAY': '05', 'JUN': '06', 'JUL': '07', 'AUG': '08', 
-        'SEP': '09', 'OCT': '10', 'NOV': '11', 'DEC': '12'
-    }
+    """Handles date parsing and formatting using dateutil."""
     
     @classmethod
     def parse_date_to_iso_format(cls, date_string: str) -> str:
         """
-        Parse date string and convert to ISO format YYYY-MM-DD.
+        Parse date string and convert to ISO format YYYY-MM-DD using dateutil.
         
         Args:
             date_string: Date like "WED, JUL 16, 2025, 10:00 AM BST"
@@ -147,19 +142,13 @@ class DateParser:
             Formatted date string like "2025-07-16"
         """
         try:
-            # Extract date parts using regex
-            match = re.search(r'([A-Z]{3})\s+(\d{1,2}),\s+(\d{4})', date_string.upper())
-            if match:
-                month_abbr, day, year = match.groups()
-                month = cls.MONTH_MAP.get(month_abbr, '01')
-                day = day.zfill(2)
-                return f"{year}-{month}-{day}"
+            # Use dateutil to parse the date string - much more robust!
+            parsed_date = dateutil_parse(date_string)
+            return parsed_date.strftime('%Y-%m-%d')
         except Exception:
-            pass
-        
-        # Fallback to today's date
-        today = datetime.now()
-        return f"{today.year}-{today.month:02d}-{today.day:02d}"
+            # Fallback to today's date
+            today = datetime.now()
+            return f"{today.year}-{today.month:02d}-{today.day:02d}"
 
 
 class FilenameUtils:
