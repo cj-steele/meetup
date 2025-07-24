@@ -63,7 +63,8 @@ class EventData:
     url: str
     name: str
     date: str
-    attendees: int  # Changed from str to int
+    attendees: int
+    host: str  # New field for event host
     location: str
     details: str
     cancelled: bool
@@ -326,9 +327,9 @@ class EventDetailsExtractor:
         self.config = config
         self.logger = logger
     
-    def extract_event_details(self, page: Page, event_url: str, return_url: str) -> Tuple[str, str, str, str, int]:
+    def extract_event_details(self, page: Page, event_url: str, return_url: str) -> Tuple[str, str, str, str, str, int]:
         """
-        Visit an individual event page and extract name, date, location, details, and attendees.
+        Visit an individual event page and extract name, date, host, location, details, and attendees.
         
         Args:
             page: Playwright page object
@@ -336,7 +337,7 @@ class EventDetailsExtractor:
             return_url: URL to return to after extraction
             
         Returns:
-            Tuple of (name, date, location, details, attendees)
+            Tuple of (name, date, host, location, details, attendees)
         """
         try:
             self.logger.info("      🔍 Visiting event page...")
@@ -345,6 +346,7 @@ class EventDetailsExtractor:
             
             name = self._extract_name(page)
             date = self._extract_date(page)
+            host = self._extract_host(page)
             location = self._extract_location(page)
             details = self._extract_details(page)
             attendees = self._extract_attendees(page)
@@ -353,7 +355,7 @@ class EventDetailsExtractor:
             page.goto(return_url, wait_until="domcontentloaded", timeout=self.config.navigation_timeout)
             time.sleep(1)
             
-            return name, date, location, details, attendees
+            return name, date, host, location, details, attendees
             
         except Exception as e:
             self.logger.error(f"      ⚠️  Error extracting event details: {e}")
@@ -362,7 +364,7 @@ class EventDetailsExtractor:
                 time.sleep(1)
             except:
                 pass
-            return "Name not found", "Date unknown", "Location not found", "Details not found", 0
+            return "Name not found", "Date unknown", "Host not found", "Location not found", "Details not found", 0
     
     def _extract_name(self, page: Page) -> str:
         """Extract event name from individual event page."""
@@ -492,6 +494,22 @@ class EventDetailsExtractor:
             pass
         
         return "Details not found"
+    
+    def _extract_host(self, page: Page) -> str:
+        """Extract event host from individual event page."""
+        try:
+            host_selector = "#main > div.px-5.w-full.bg-white.border-b.border-shadowColor.py-2.lg\\:py-6 > div > a > div > div.ml-6 > div:nth-child(2) > span"
+            host_elem = page.locator(host_selector)
+            
+            if host_elem.count() > 0:
+                host = host_elem.inner_text().strip()
+                if host:
+                    return host
+                    
+        except Exception:
+            pass
+        
+        return "Host not found"
 
 
 # =============================================================================
@@ -567,7 +585,7 @@ class EventScraper:
                 self.logger.info(f"   🔍 [{i+1}/{len(cached_events)}] Event ID: {event_id}, Cancelled: {is_cancelled}")
                 
                 # Extract detailed information from individual event page
-                name, date, location, details, attendees = self.details_extractor.extract_event_details(
+                name, date, host, location, details, attendees = self.details_extractor.extract_event_details(
                     page, event_url, events_list_url
                 )
                 
@@ -582,6 +600,7 @@ class EventScraper:
                     name=name,
                     date=date,
                     attendees=attendees,
+                    host=host,
                     location=location,
                     details=details,
                     cancelled=is_cancelled
