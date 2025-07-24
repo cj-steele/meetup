@@ -506,6 +506,26 @@ class EventScraper:
         self.logger = logger
         self.details_extractor = EventDetailsExtractor(config, logger)
     
+    def _clean_event_url(self, url: str) -> str:
+        """
+        Clean event URL by removing query parameters.
+        
+        Args:
+            url: Raw URL like "https://www.meetup.com/group/events/123/?eventOrigin=group_events_list"
+            
+        Returns:
+            Clean URL like "https://www.meetup.com/group/events/123/"
+        """
+        try:
+            # Split at the first ? to remove query parameters
+            clean_url = url.split('?')[0]
+            # Ensure it ends with / if it doesn't already
+            if not clean_url.endswith('/'):
+                clean_url += '/'
+            return clean_url
+        except Exception:
+            return url  # Return original URL if cleaning fails
+    
     def scrape_events(self, page: Page, max_events: int) -> List[EventData]:
         """
         Scrape event data using two-phase approach:
@@ -558,7 +578,7 @@ class EventScraper:
                 # Create event data
                 event_data = EventData(
                     id=event_id,
-                    url=event_url,
+                    url=self._clean_event_url(event_url),
                     name=name,
                     date=date,
                     attendees=attendees,
