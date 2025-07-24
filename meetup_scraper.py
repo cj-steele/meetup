@@ -313,10 +313,10 @@ class EventLoader:
             
             self.logger.info(f"   Found {current_count} event cards...")
             
-            # Debug if no events found on first attempt
+            # Stop if no events found
             if current_count == 0 and scroll_attempts == 0:
-                if self._debug_empty_page(page):
-                    return 0
+                self.logger.warning("   ⚠️  No events found on page")
+                return 0
             
             # Stop if enough events or no new events
             if current_count >= max_events or current_count == previous_count:
@@ -328,26 +328,7 @@ class EventLoader:
         self.logger.info(f"✅ Loaded {current_count} events")
         return current_count
     
-    def _debug_empty_page(self, page: Page) -> bool:
-        """
-        Debug why no events were found.
-        
-        Returns:
-            bool: True if should stop scraping, False if should continue
-        """
-        page_text = page.inner_text('body').lower()
-        self.logger.info(f"   🔍 Debugging 0 events - Page title: {page.title()}")
-        self.logger.info(f"   🔍 Current URL: {page.url}")
-        
-        if 'login' in page_text or 'sign in' in page_text:
-            self.logger.warning("   ⚠️  Page contains login content - authentication required!")
-            return True
-            
-        if any(phrase in page_text for phrase in ['no events', 'no upcoming events', 'no past events']):
-            self.logger.info("   ℹ️  Page indicates no events available")
-            return True
-            
-        return False
+
 
 
 # =============================================================================
