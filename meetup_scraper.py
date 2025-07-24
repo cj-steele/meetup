@@ -452,7 +452,9 @@ class MeetupScraper:
         """Save event data to file."""
         try:
             try:
-                parsed_date = dateutil_parse(event_data.date)
+                # Clean the date string to handle time ranges and newlines
+                cleaned_date = self._clean_date_string(event_data.date)
+                parsed_date = dateutil_parse(cleaned_date)
                 iso_date = parsed_date.strftime('%Y-%m-%d')
             except Exception:
                 today = datetime.now()
@@ -489,6 +491,24 @@ class MeetupScraper:
                 
         except Exception as e:
             self.logger.warning(f"⚠️  Failed to save to CSV: {e}")
+    
+    def _clean_date_string(self, date_string: str) -> str:
+        """Clean date string to make it parseable by dateutil."""
+        try:
+            # Handle newlines in date strings
+            cleaned = date_string.replace('\n', ' ')
+            
+            # Handle time ranges like "10:00 AM to 4:00 PM BST" - take just the start time
+            if ' to ' in cleaned:
+                cleaned = cleaned.split(' to ')[0]
+            
+            # Handle other time range formats
+            if ' - ' in cleaned:
+                cleaned = cleaned.split(' - ')[0]
+                
+            return cleaned.strip()
+        except Exception:
+            return date_string
 
 
 @click.command()
