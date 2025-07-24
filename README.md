@@ -53,6 +53,9 @@ python meetup_scraper.py python-seattle --max-events 25
 
 # Save events to both JSON and CSV
 python meetup_scraper.py python-seattle --csv --max-events 15
+
+# Scrape ALL events (unlimited)
+python meetup_scraper.py python-seattle --all --csv
 ```
 
 ### Group Name Format
@@ -65,6 +68,7 @@ Extract the group name from the Meetup URL:
 
 - `--max-events`: Maximum number of events to scrape (default: 10)
 - `--csv`: Save events to CSV file in addition to JSON files (`events/events.csv`)
+- `--all`: Scrape ALL events (ignores `--max-events`, continues until no more events found)
 
 ## First-Time Setup
 

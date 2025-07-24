@@ -110,12 +110,15 @@ class MeetupScraper:
         self.config.browser_state_dir.mkdir(exist_ok=True)
         self.config.events_dir.mkdir(exist_ok=True)
     
-    def run(self, group_name: str, max_events: int, save_csv: bool = False) -> None:
+    def run(self, group_name: str, max_events: int, save_csv: bool = False, scrape_all: bool = False) -> None:
         """Main execution method."""
         self.save_csv = save_csv
         
         try:
-            self.logger.info(f"🚀 Scraping events for group: {group_name}")
+            if scrape_all:
+                self.logger.info(f"🚀 Scraping ALL events for group: {group_name}")
+            else:
+                self.logger.info(f"🚀 Scraping events for group: {group_name} (max: {max_events})")
             if save_csv:
                 self.logger.info(f"📄 CSV output enabled: {self.csv_file_path}")
             
@@ -129,7 +132,9 @@ class MeetupScraper:
                 page = context.new_page()
                 
                 try:
-                    events = self._scrape_events(page, group_name, max_events)
+                    # Use unlimited events if --all flag is set
+                    effective_max = float('inf') if scrape_all else max_events
+                    events = self._scrape_events(page, group_name, effective_max)
                     self.logger.info(f"✅ Completed: {len(events)} events saved")
                     input("Press ENTER to close browser...")
                 finally:
@@ -193,11 +198,30 @@ class MeetupScraper:
         time.sleep(self.config.page_load_wait)
         
         previous_count = 0
+        current_count = 0
         scroll_attempts = 0
+        consecutive_no_change = 0
+        is_unlimited = max_events == float('inf')
         
-        while scroll_attempts < self.config.max_scroll_attempts:
-            page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
-            time.sleep(self.config.scroll_wait_time)
+        # For unlimited mode, use much higher scroll limit
+        max_scroll_limit = 1000 if is_unlimited else self.config.max_scroll_attempts
+        
+        while scroll_attempts < max_scroll_limit:
+            # Try multiple scroll strategies to trigger lazy loading
+            if scroll_attempts % 3 == 0:
+                # Every 3rd scroll: scroll to end of events list
+                page.evaluate("""
+                    const eventCards = document.querySelectorAll('[id^="past-event-card-ep-"]');
+                    if (eventCards.length > 0) {
+                        eventCards[eventCards.length - 1].scrollIntoView({behavior: 'smooth', block: 'end'});
+                    }
+                """)
+            else:
+                # Regular scroll
+                page.evaluate("window.scrollBy(0, window.innerHeight)")
+            
+            # Wait longer for lazy loading to happen
+            time.sleep(2)
             
             event_cards = page.locator('[id^="past-event-card-ep-"]')
             current_count = event_cards.count()
@@ -206,11 +230,36 @@ class MeetupScraper:
                 self.logger.warning("⚠️  No events found")
                 return 0
             
-            if current_count >= max_events or current_count == previous_count:
+            # Progress reporting
+            if current_count != previous_count:
+                if is_unlimited:
+                    self.logger.info(f"📄 Loading events... {current_count} found so far")
+                elif max_events > 10:
+                    self.logger.info(f"📄 Loading events... {current_count}/{max_events}")
+            
+            # Check if we're getting new events
+            if current_count == previous_count:
+                consecutive_no_change += 1
+                
+                # Be MUCH more patient for lazy loading
+                patience_limit = 20 if is_unlimited else 10
+                
+                if consecutive_no_change >= patience_limit:
+                    self.logger.info(f"📄 No new events after {patience_limit} scroll attempts. Final count: {current_count}")
+                    break
+            else:
+                consecutive_no_change = 0
+            
+            # For limited mode, stop when we have enough events  
+            if not is_unlimited and current_count >= max_events:
+                self.logger.info(f"📄 Reached target: {current_count} events loaded")
                 break
                 
             previous_count = current_count
             scroll_attempts += 1
+        
+        if scroll_attempts >= max_scroll_limit:
+            self.logger.warning(f"⚠️  Reached scroll limit ({max_scroll_limit} attempts), {current_count} events loaded")
         
         return current_count
     
@@ -227,6 +276,10 @@ class MeetupScraper:
         # Phase 2: Extract details
         for i, (event_url, is_cancelled) in enumerate(cached_events):
             try:
+                # For unlimited mode, don't limit the number processed
+                if max_events != float('inf') and len(events) >= max_events:
+                    break
+                    
                 event_id = self._extract_event_id(event_url)
                 
                 name, raw_date, host, location, details, attendees = self._extract_event_details(
@@ -259,7 +312,10 @@ class MeetupScraper:
                     self._save_to_csv(event_data)
                 
                 status = " (CANCELLED)" if is_cancelled else ""
-                self.logger.info(f"✅ [{i+1}/{len(cached_events)}] {event_data.name[:50]}{status}")
+                if max_events == float('inf'):
+                    self.logger.info(f"✅ [{i+1}/{len(cached_events)}] {event_data.name[:50]}{status}")
+                else:
+                    self.logger.info(f"✅ [{i+1}/{len(cached_events)}] {event_data.name[:50]}{status}")
                 
             except Exception as e:
                 self.logger.error(f"⚠️  Error processing event {i+1}: {e}")
@@ -275,7 +331,10 @@ class MeetupScraper:
             event_cards = page.locator('[id^="past-event-card-ep-"]')
             event_count = event_cards.count()
             
-            for i in range(min(event_count, max_events)):
+            # For unlimited mode, process all events found
+            events_to_process = event_count if max_events == float('inf') else min(event_count, max_events)
+            
+            for i in range(events_to_process):
                 try:
                     event_card = event_cards.nth(i)
                     
@@ -289,6 +348,11 @@ class MeetupScraper:
                 except Exception as e:
                     self.logger.warning(f"⚠️  Error caching event {i+1}: {e}")
                     continue
+            
+            if max_events == float('inf'):
+                self.logger.info(f"📋 Cached {len(cached_events)} events (all available)")
+            else:
+                self.logger.info(f"📋 Cached {len(cached_events)} events (max: {max_events})")
             
             return cached_events
             
@@ -526,11 +590,12 @@ class MeetupScraper:
 @click.argument('group_name', required=True)
 @click.option('--max-events', default=10, help='Maximum number of events to scrape (default: 10)')
 @click.option('--csv', is_flag=True, help='Save events to CSV file (events/events.csv)')
-def main(group_name: str, max_events: int, csv: bool):
+@click.option('--all', 'scrape_all', is_flag=True, help='Scrape ALL events (ignores --max-events)')
+def main(group_name: str, max_events: int, csv: bool, scrape_all: bool):
     """Access and scrape past events for a Meetup group."""
     config = ScraperConfig()
     scraper = MeetupScraper(config)
-    scraper.run(group_name, max_events, csv)
+    scraper.run(group_name, max_events, csv, scrape_all)
 
 
 if __name__ == "__main__":
