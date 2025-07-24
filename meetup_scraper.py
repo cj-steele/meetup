@@ -224,64 +224,6 @@ class MeetupScraper:
         finally:
             context.close()
     
-    def _needs_login(self, playwright_instance, group_name: str) -> bool:
-        """Check if login is needed by testing access in headless mode."""
-        context = playwright_instance.chromium.launch_persistent_context(
-            user_data_dir=str(self.config.browser_state_dir),
-            headless=True,
-            args=self.config.browser_args
-        )
-        
-        try:
-            page = context.new_page()
-            if not self._navigate_to_group_events(page, group_name):
-                return True  # Assume login needed
-            
-            is_login_needed = self._is_login_page(page)
-            
-            # Give a moment for the page to settle
-            time.sleep(1)
-            
-            return is_login_needed
-        
-        except Exception:
-            return True  # Assume login needed on error
-        finally:
-            context.close()
-    
-    def _handle_login(self, playwright_instance, group_name: str) -> None:
-        """Handle login in non-headless mode."""
-        context = playwright_instance.chromium.launch_persistent_context(
-            user_data_dir=str(self.config.browser_state_dir),
-            headless=False,  # Non-headless for login
-            args=self.config.browser_args
-        )
-        
-        try:
-            page = context.new_page()
-            
-            if not self._navigate_to_group_events(page, group_name):
-                raise NavigationError("Failed to navigate to events page")
-            
-            if self._is_login_page(page):
-                if not self._wait_for_login(page):
-                    raise Exception("Login failed or was cancelled")
-            
-            # Verify login worked by navigating to events page again
-            if not self._navigate_to_group_events(page, group_name):
-                raise NavigationError("Failed to navigate after login")
-                
-            if self._is_login_page(page):
-                raise Exception("Still on login page after authentication")
-            
-            self.logger.info("✅ Login completed successfully")
-            
-            # Give time for session to be properly saved
-            time.sleep(2)
-            
-        finally:
-            context.close()
-    
     def _scrape_in_headless_mode(self, playwright_instance, group_name: str, max_events: int) -> List[EventData]:
         """Perform the actual scraping in headless mode."""
         context = playwright_instance.chromium.launch_persistent_context(
