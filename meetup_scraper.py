@@ -63,7 +63,7 @@ class EventData:
     url: str
     name: str
     date: str
-    attendees: str
+    attendees: int  # Changed from str to int
     location: str
     details: str
     cancelled: bool
@@ -326,7 +326,7 @@ class EventDetailsExtractor:
         self.config = config
         self.logger = logger
     
-    def extract_event_details(self, page: Page, event_url: str, return_url: str) -> Tuple[str, str, str, str, str]:
+    def extract_event_details(self, page: Page, event_url: str, return_url: str) -> Tuple[str, str, str, str, int]:
         """
         Visit an individual event page and extract name, date, location, details, and attendees.
         
@@ -362,7 +362,7 @@ class EventDetailsExtractor:
                 time.sleep(1)
             except:
                 pass
-            return "Name not found", "Date unknown", "Location not found", "Details not found", "0"
+            return "Name not found", "Date unknown", "Location not found", "Details not found", 0
     
     def _extract_name(self, page: Page) -> str:
         """Extract event name from individual event page."""
@@ -396,7 +396,7 @@ class EventDetailsExtractor:
         
         return "Date unknown"
     
-    def _extract_attendees(self, page: Page) -> str:
+    def _extract_attendees(self, page: Page) -> int:
         """Extract attendees count from individual event page."""
         try:
             attendees_selector = "#attendees > div.flex.items-center.justify-between > h2"
@@ -409,13 +409,13 @@ class EventDetailsExtractor:
                     match = re.search(r'(\d+)', attendees_text)
                     if match:
                         count = int(match.group(1))
-                        return f"{count} attendees"
-                    return attendees_text
+                        return count
+                    return 0 # Default for cancelled events or when element not found
                     
         except Exception:
             pass
         
-        return "0"  # Default for cancelled events or when element not found
+        return 0  # Default for cancelled events or when element not found
     
     def _extract_location(self, page: Page) -> str:
         """Extract location from event page."""
@@ -572,8 +572,8 @@ class EventScraper:
                 )
                 
                 # For cancelled events, default attendees to 0
-                if is_cancelled and (attendees == "0" or "not found" in attendees.lower()):
-                    attendees = "0"
+                if is_cancelled and (attendees == 0 or "not found" in str(attendees).lower()):
+                    attendees = 0
                 
                 # Create event data
                 event_data = EventData(
