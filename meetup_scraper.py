@@ -200,17 +200,28 @@ class MeetupScraper:
         """Create necessary directories."""
         self.config.events_dir.mkdir(exist_ok=True)
     
-    def run(self, group_name: str, max_events: int, save_csv: bool = False, scrape_all: bool = False) -> None:
+    def run(self, group_name: str, max_events: int, save_csv: bool = True, save_json: bool = True, scrape_all: bool = False) -> None:
         """Main execution method."""
         self.save_csv = save_csv
+        self.save_json = save_json
         
         try:
             if scrape_all:
                 self.logger.info(f"🚀 Scraping ALL events for group: {group_name}")
             else:
                 self.logger.info(f"🚀 Scraping events for group: {group_name} (max: {max_events})")
+            
+            # Log output formats
+            outputs = []
             if save_csv:
-                self.logger.info(f"📄 CSV output enabled: {self.csv_file_path}")
+                outputs.append(f"CSV: {self.csv_file_path}")
+            if save_json:
+                outputs.append("JSON: events/YYYY-MM-DD/")
+            
+            if outputs:
+                self.logger.info(f"📄 Output formats: {' | '.join(outputs)}")
+            else:
+                self.logger.warning("⚠️  No output format selected - events will not be saved!")
             
             with sync_playwright() as p:
                 # Use unlimited events if --all flag is set
@@ -546,7 +557,9 @@ class MeetupScraper:
                 )
                 
                 events.append(event_data)
-                self._save_event_data(event_data)
+                
+                if self.save_json:
+                    self._save_event_data(event_data)
                 
                 if self.save_csv:
                     self._save_to_csv(event_data)
@@ -829,13 +842,14 @@ class MeetupScraper:
 @click.command()
 @click.argument('group_name', required=True)
 @click.option('--max-events', default=10, help='Maximum number of events to scrape (default: 10)')
-@click.option('--csv', is_flag=True, help='Save events to CSV file (events/events.csv)')
+@click.option('--no-csv', is_flag=True, help='Disable CSV output (CSV is saved by default)')
+@click.option('--no-json', is_flag=True, help='Disable JSON output (JSON is saved by default)')
 @click.option('--all', 'scrape_all', is_flag=True, help='Scrape ALL events (ignores --max-events)')
-def main(group_name: str, max_events: int, csv: bool, scrape_all: bool):
+def main(group_name: str, max_events: int, no_csv: bool, no_json: bool, scrape_all: bool):
     """Access and scrape past events for a Meetup group."""
     config = ScraperConfig()
     scraper = MeetupScraper(config)
-    scraper.run(group_name, max_events, csv, scrape_all)
+    scraper.run(group_name, max_events, save_csv=not no_csv, save_json=not no_json, scrape_all=scrape_all)
 
 
 if __name__ == "__main__":
