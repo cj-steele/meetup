@@ -50,6 +50,9 @@ python meetup_scraper.py python-seattle
 
 # Scrape specific number of events
 python meetup_scraper.py python-seattle --max-events 25
+
+# Save events to both JSON and CSV
+python meetup_scraper.py python-seattle --csv --max-events 15
 ```
 
 ### Group Name Format
@@ -61,6 +64,7 @@ Extract the group name from the Meetup URL:
 ## CLI Options
 
 - `--max-events`: Maximum number of events to scrape (default: 10)
+- `--csv`: Save events to CSV file in addition to JSON files (`events/events.csv`)
 
 ## First-Time Setup
 
@@ -78,12 +82,29 @@ Events are saved in the `events/` directory:
 
 ```
 events/
+├── events.csv                    (when --csv flag is used)
 ├── 2025-01-15/
 │   ├── Python Workshop Introduction to Data Science.json
 │   └── Advanced Flask Development Patterns.json
 ├── 2025-01-20/
 │   └── Monthly Python Networking Social.json
 ```
+
+### CSV Output
+
+When using the `--csv` flag, all events are also saved to `events/events.csv` with the following columns:
+
+| Column | Description |
+|--------|-------------|
+| id | Event ID |
+| url | Event URL |
+| name | Event title |
+| date | Event date and time |
+| attendees | Number of attendees |
+| host | Event host name |
+| location | Event location |
+| details | Event description |
+| cancelled | Whether event was cancelled (true/false) |
 
 ### Event Data Format
 

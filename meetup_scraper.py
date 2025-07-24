@@ -6,6 +6,7 @@ Meetup.com Group Past Events Scraper
 import time
 import json
 import re
+import csv
 import logging
 from datetime import datetime
 from dateutil.parser import parse as dateutil_parse
@@ -100,16 +101,22 @@ class MeetupScraper:
         self.config = config or ScraperConfig()
         self.logger = setup_logging()
         self._setup_directories()
+        self.save_csv = False
+        self.csv_file_path = self.config.events_dir / "events.csv"
         
     def _setup_directories(self) -> None:
         """Create necessary directories."""
         self.config.browser_state_dir.mkdir(exist_ok=True)
         self.config.events_dir.mkdir(exist_ok=True)
     
-    def run(self, group_name: str, max_events: int) -> None:
+    def run(self, group_name: str, max_events: int, save_csv: bool = False) -> None:
         """Main execution method."""
+        self.save_csv = save_csv
+        
         try:
             self.logger.info(f"🚀 Scraping events for group: {group_name}")
+            if save_csv:
+                self.logger.info(f"📄 CSV output enabled: {self.csv_file_path}")
             
             with sync_playwright() as p:
                 context = p.chromium.launch_persistent_context(
@@ -242,6 +249,9 @@ class MeetupScraper:
                 
                 events.append(event_data)
                 self._save_event_data(event_data)
+                
+                if self.save_csv:
+                    self._save_to_csv(event_data)
                 
                 status = " (CANCELLED)" if is_cancelled else ""
                 self.logger.info(f"✅ [{i+1}/{len(cached_events)}] {event_data.name[:50]}{status}")
@@ -459,16 +469,37 @@ class MeetupScraper:
                 
         except Exception as e:
             raise ExtractionError(f"Failed to save event data: {e}")
+    
+    def _save_to_csv(self, event_data: EventData) -> None:
+        """Save event data to CSV file."""
+        try:
+            # Check if CSV file exists and has headers
+            file_exists = self.csv_file_path.exists()
+            
+            with open(self.csv_file_path, 'a', newline='', encoding='utf-8') as csvfile:
+                fieldnames = ['id', 'url', 'name', 'date', 'attendees', 'host', 'location', 'details', 'cancelled']
+                writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+                
+                # Write headers if file is new
+                if not file_exists:
+                    writer.writeheader()
+                
+                # Write event data
+                writer.writerow(asdict(event_data))
+                
+        except Exception as e:
+            self.logger.warning(f"⚠️  Failed to save to CSV: {e}")
 
 
 @click.command()
 @click.argument('group_name', required=True)
 @click.option('--max-events', default=10, help='Maximum number of events to scrape (default: 10)')
-def main(group_name: str, max_events: int):
+@click.option('--csv', is_flag=True, help='Save events to CSV file (events/events.csv)')
+def main(group_name: str, max_events: int, csv: bool):
     """Access and scrape past events for a Meetup group."""
     config = ScraperConfig()
     scraper = MeetupScraper(config)
-    scraper.run(group_name, max_events)
+    scraper.run(group_name, max_events, csv)
 
 
 if __name__ == "__main__":
