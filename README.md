@@ -1,144 +1,108 @@
-# Meetup.com Group Past Events Scraper
+# Meetup Event Scraper
 
-A Python tool to scrape past events from any Meetup.com group page.
+A Python tool to scrape past event data from Meetup groups using Playwright automation.
 
 ## Features
 
-- 🚀 **Simple CLI**: Easy command-line interface
-- 🔐 **Session Persistence**: Handles login automatically using persistent browser state
-- 📊 **Comprehensive Data**: Extracts event details, dates, attendees, hosts, locations, and descriptions
-- 📁 **Organized Storage**: Saves events in date-based directories with sanitized filenames
-- ⚡ **Fast & Reliable**: Two-phase scraping approach for better reliability
+- ✅ **Smart lazy loading** - Handles groups with 400+ events
+- ✅ **Two-phase scraping** - Fast URL caching then detailed extraction
+- ✅ **Session persistence** - Remembers login between runs
+- ✅ **Multiple output formats** - JSON files and CSV export
+- ✅ **Cross-platform** - Works on Windows, macOS, and Linux
+- ✅ **Robust error handling** - Graceful handling of missing data
+- ✅ **Progress tracking** - Real-time progress updates
 
 ## Installation
 
-1. Clone the repository:
-```bash
-git clone <repository-url>
+### Prerequisites
+- Python 3.8 or higher
+- Git
+
+### Setup
+
+**Windows:**
+```cmd
+git clone https://github.com/your-username/meetup.git
 cd meetup
-```
-
-2. Create and activate a virtual environment:
-```bash
 python -m venv venv
-source venv/bin/activate  # On Windows: venv\Scripts\activate
-```
-
-3. Install dependencies:
-```bash
+venv\Scripts\activate
 pip install -r requirements.txt
+playwright install chromium
 ```
 
-4. Install Playwright browsers:
+**macOS/Linux:**
 ```bash
+git clone https://github.com/your-username/meetup.git
+cd meetup
+python3 -m venv venv
+source venv/bin/activate
+pip install -r requirements.txt
 playwright install chromium
 ```
 
 ## Usage
 
-### Basic Usage
+### Basic Commands
+
+**Scrape specific number of events:**
+```bash
+python meetup_scraper.py group-name --max-events 50
+```
+
+**Scrape all available events:**
+```bash
+python meetup_scraper.py group-name --all
+```
+
+**Export to CSV:**
+```bash
+python meetup_scraper.py group-name --max-events 100 --csv
+```
+
+### First Run
+
+On the first run, you'll be prompted to log in to Meetup:
+1. A browser window will open
+2. Log in with your Meetup credentials 
+3. Press ENTER in the terminal when done
+4. Your session will be saved for future runs
+
+### Output
+
+Events are saved to:
+- **JSON files**: `events/YYYY-MM-DD/event-name.json` (one per event)
+- **CSV file**: `events/events.csv` (all events in one file, if `--csv` used)
+
+## Cross-Platform Notes
+
+- **Windows**: Uses Windows Chrome user agent and paths
+- **macOS**: Uses macOS Safari user agent and Unix paths  
+- **Linux**: Uses Linux Chrome user agent and Unix paths
+- **Browser state**: Automatically saved in `browser_state/` directory on all platforms
+
+## Examples
 
 ```bash
-python meetup_scraper.py <group-name>
+# Scrape 25 recent events from Python Glasgow
+python meetup_scraper.py python-glasgow --max-events 25
+
+# Scrape all events from London Tech Meetups and export CSV
+python meetup_scraper.py london-tech-meetups --all --csv
+
+# Scrape 100 events from React London
+python meetup_scraper.py react-london --max-events 100
 ```
 
-### Examples
+## Troubleshooting
 
-```bash
-# Scrape 10 events (default)
-python meetup_scraper.py python-seattle
+**Login issues:**
+- Delete `browser_state/` directory to force fresh login
+- Ensure you have valid Meetup account
 
-# Scrape specific number of events
-python meetup_scraper.py python-seattle --max-events 25
+**Slow loading:**
+- Large groups (400+ events) may take several minutes
+- Progress is shown in real-time
 
-# Save events to both JSON and CSV
-python meetup_scraper.py python-seattle --csv --max-events 15
-
-# Scrape ALL events (unlimited)
-python meetup_scraper.py python-seattle --all --csv
-```
-
-### Group Name Format
-
-Extract the group name from the Meetup URL:
-- URL: `https://www.meetup.com/python-seattle/` → Group name: `python-seattle`
-- URL: `https://www.meetup.com/SF-JavaScript/` → Group name: `SF-JavaScript`
-
-## CLI Options
-
-- `--max-events`: Maximum number of events to scrape (default: 10)
-- `--csv`: Save events to CSV file in addition to JSON files (`events/events.csv`)
-- `--all`: Scrape ALL events (ignores `--max-events`, continues until no more events found)
-
-## First-Time Setup
-
-On first run, the browser will open for login:
-
-1. Log in to your Meetup.com account
-2. Press ENTER in the terminal when ready
-3. The scraper will continue automatically
-
-Your login session is saved for future runs.
-
-## Output Structure
-
-Events are saved in the `events/` directory:
-
-```
-events/
-├── events.csv                    (when --csv flag is used)
-├── 2025-01-15/
-│   ├── Python Workshop Introduction to Data Science.json
-│   └── Advanced Flask Development Patterns.json
-├── 2025-01-20/
-│   └── Monthly Python Networking Social.json
-```
-
-### CSV Output
-
-When using the `--csv` flag, all events are also saved to `events/events.csv` with the following columns:
-
-| Column | Description |
-|--------|-------------|
-| id | Event ID |
-| url | Event URL |
-| name | Event title |
-| date | Event date (e.g., "Wednesday, July 23, 2025") |
-| time | Event time (e.g., "10:00 AM to 4:00 PM BST") |
-| attendees | Number of attendees |
-| host | Event host name |
-| location | Event location |
-| details | Event description |
-| cancelled | Whether event was cancelled (true/false) |
-
-### Event Data Format
-
-Each JSON file contains:
-
-```json
-{
-  "id": "123456789",
-  "url": "https://www.meetup.com/group/events/123456789/",
-  "name": "Event Title",
-  "date": "Wednesday, January 15, 2025",
-  "time": "7:00 PM to 9:00 PM PST",
-  "attendees": 42,
-  "host": "Host Name",
-  "location": "Event Location",
-  "details": "Event description...",
-  "cancelled": false
-}
-```
-
-## Requirements
-
-- Python 3.9+
-- Dependencies listed in `requirements.txt`
-- Chromium browser (installed via Playwright)
-
-## Dependencies
-
-- `playwright` - Browser automation
-- `click` - CLI interface
-- `python-dateutil` - Date parsing
-- `pathvalidate` - Filename sanitization 
+**Platform issues:**
+- Ensure Playwright browsers are installed: `playwright install chromium`
+- On Linux, you may need additional dependencies: `playwright install-deps` 

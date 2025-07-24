@@ -36,14 +36,30 @@ class ScraperConfig:
     
     def __post_init__(self):
         if self.browser_args is None:
+            # Generate platform-appropriate user agent
+            user_agent = self._get_platform_user_agent()
             self.browser_args = [
                 "--no-first-run",
                 "--disable-blink-features=AutomationControlled",
                 "--disable-dev-shm-usage",
                 "--no-sandbox",
                 "--disable-extensions",
-                "--user-agent=Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36"
+                f"--user-agent={user_agent}"
             ]
+    
+    def _get_platform_user_agent(self) -> str:
+        """Generate platform-appropriate user agent string."""
+        system = platform.system().lower()
+        
+        if system == "darwin":  # macOS
+            return "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+        elif system == "windows":
+            return "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+        elif system == "linux":
+            return "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+        else:
+            # Fallback to generic
+            return "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
 
 
 @dataclass
