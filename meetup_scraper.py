@@ -222,6 +222,8 @@ class MeetupScraper:
                 self.logger.info(f"📄 Output formats: {' | '.join(outputs)}")
             else:
                 self.logger.warning("⚠️  No output format selected - events will not be saved!")
+                self.logger.info("💡 Use --no-csv or --no-json (not both) to save in at least one format")
+                return
             
             with sync_playwright() as p:
                 # Use unlimited events if --all flag is set
