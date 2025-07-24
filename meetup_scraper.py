@@ -8,6 +8,7 @@ import json
 import re
 import csv
 import logging
+import platform
 from datetime import datetime
 from dateutil.parser import parse as dateutil_parse
 from pathvalidate import sanitize_filename
