@@ -99,7 +99,8 @@ When using the `--csv` flag, all events are also saved to `events/events.csv` wi
 | id | Event ID |
 | url | Event URL |
 | name | Event title |
-| date | Event date and time |
+| date | Event date (e.g., "Wednesday, July 23, 2025") |
+| time | Event time (e.g., "10:00 AM to 4:00 PM BST") |
 | attendees | Number of attendees |
 | host | Event host name |
 | location | Event location |
@@ -115,7 +116,8 @@ Each JSON file contains:
   "id": "123456789",
   "url": "https://www.meetup.com/group/events/123456789/",
   "name": "Event Title",
-  "date": "WED, JAN 15, 2025, 7:00 PM PST",
+  "date": "Wednesday, January 15, 2025",
+  "time": "7:00 PM to 9:00 PM PST",
   "attendees": 42,
   "host": "Host Name",
   "location": "Event Location",
