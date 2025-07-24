@@ -1,5 +1,5 @@
 # Project-specific
-browser_state/
+session.json
 events/
 venv/
 .idea/

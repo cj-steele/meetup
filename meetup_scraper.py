@@ -25,10 +25,10 @@ class ScraperConfig:
     """Configuration for the scraper."""
     # Directory settings
     project_dir: Path = Path(__file__).parent
-    browser_state_dir: Path = project_dir / "browser_state"
     events_dir: Path = project_dir / "events"
+    session_file: Path = project_dir / "session.json"
     
-    # Browser settings - removed headless parameter since it's now dynamic
+    # Browser settings
     browser_args: List[str] = None
     
     # Timing settings
@@ -85,18 +85,18 @@ class MeetupScraperError(Exception):
     pass
 
 
-class NavigationError(MeetupScraperError):
+class NavigationError(Exception):
     """Raised when navigation fails."""
     pass
 
 
-class LoginRequiredError(MeetupScraperError):
-    """Raised when login is required but not completed."""
+class DataExtractionError(Exception):
+    """Raised when data extraction fails."""
     pass
 
 
-class ExtractionError(MeetupScraperError):
-    """Raised when data extraction fails."""
+class LoginRequiredError(Exception):
+    """Raised when login is required."""
     pass
 
 
@@ -124,9 +124,80 @@ class MeetupScraper:
         self.save_csv = False
         self.csv_file_path = self.config.events_dir / "events.csv"
         
+    def _save_session(self, page) -> None:
+        """Save session data (cookies and localStorage) to JSON file."""
+        try:
+            # Get cookies
+            cookies = page.context.cookies()
+            
+            # Get localStorage data
+            local_storage = page.evaluate("""
+                () => {
+                    const storage = {};
+                    for (let i = 0; i < localStorage.length; i++) {
+                        const key = localStorage.key(i);
+                        storage[key] = localStorage.getItem(key);
+                    }
+                    return storage;
+                }
+            """)
+            
+            # Save to JSON
+            session_data = {
+                "cookies": cookies,
+                "localStorage": local_storage,
+                "timestamp": datetime.now().isoformat()
+            }
+            
+            with open(self.config.session_file, 'w') as f:
+                json.dump(session_data, f, indent=2)
+                
+            self.logger.info(f"💾 Session saved to {self.config.session_file}")
+            
+        except Exception as e:
+            self.logger.warning(f"⚠️  Failed to save session: {e}")
+    
+    def _load_session(self, page) -> bool:
+        """Load session data from JSON file and apply to page."""
+        try:
+            if not self.config.session_file.exists():
+                self.logger.info("📝 No existing session file found")
+                return False
+            
+            with open(self.config.session_file, 'r') as f:
+                session_data = json.load(f)
+            
+            # Check if session is recent (within 7 days)
+            session_time = datetime.fromisoformat(session_data["timestamp"])
+            if (datetime.now() - session_time).days > 7:
+                self.logger.info("📅 Session file is too old, will need fresh login")
+                return False
+            
+            # Add cookies to context
+            if "cookies" in session_data and session_data["cookies"]:
+                page.context.add_cookies(session_data["cookies"])
+                self.logger.info(f"🍪 Restored {len(session_data['cookies'])} cookies")
+            
+            # Navigate to meetup.com first, then restore localStorage
+            page.goto("https://www.meetup.com/", wait_until="domcontentloaded")
+            
+            # Restore localStorage after navigation
+            if "localStorage" in session_data and session_data["localStorage"]:
+                for key, value in session_data["localStorage"].items():
+                    try:
+                        page.evaluate(f"localStorage.setItem('{key}', '{value}')")
+                    except Exception:
+                        pass  # Skip localStorage items that fail
+                self.logger.info(f"💾 Restored localStorage items")
+            
+            return True
+            
+        except Exception as e:
+            self.logger.warning(f"⚠️  Failed to load session: {e}")
+            return False
+        
     def _setup_directories(self) -> None:
         """Create necessary directories."""
-        self.config.browser_state_dir.mkdir(exist_ok=True)
         self.config.events_dir.mkdir(exist_ok=True)
     
     def run(self, group_name: str, max_events: int, save_csv: bool = False, scrape_all: bool = False) -> None:
@@ -145,60 +216,134 @@ class MeetupScraper:
                 # Use unlimited events if --all flag is set
                 effective_max = float('inf') if scrape_all else max_events
                 
-                # Determine if we need non-headless mode for login
-                needs_login = self._quick_login_check(p, group_name)
-                
-                if needs_login:
-                    self.logger.info("🔐 Login required - starting browser for authentication")
-                    # Start non-headless for login, then continue with scraping
-                    events = self._scrape_with_login(p, group_name, effective_max)
-                else:
-                    self.logger.info("🤖 Already logged in - starting headless scraping")
-                    # Already logged in, go straight to headless scraping
-                    events = self._scrape_in_headless_mode(p, group_name, effective_max)
-                
-                self.logger.info(f"✅ Completed: {len(events)} events saved")
+                # Try headless first to see if we're already logged in
+                try:
+                    self.logger.info("🔍 Checking existing session...")
+                    events = self._try_headless_scraping(p, group_name, effective_max)
+                    self.logger.info(f"✅ Completed: {len(events)} events saved")
+                    return
+                except LoginRequiredError:
+                    # If headless fails due to login, switch to non-headless
+                    self.logger.info("🔐 Login required - switching to browser for authentication")
+                    events = self._scrape_with_login_and_switch(p, group_name, effective_max)
+                    self.logger.info(f"✅ Completed: {len(events)} events saved")
                     
         except KeyboardInterrupt:
             self.logger.info("\n⏹️  Operation cancelled by user")
         except Exception as e:
             self.logger.error(f"❌ Error: {e}")
     
-    def _quick_login_check(self, playwright_instance, group_name: str) -> bool:
-        """Quick check if login is needed using headless mode."""
-        context = playwright_instance.chromium.launch_persistent_context(
-            user_data_dir=str(self.config.browser_state_dir),
+    def _try_headless_scraping(self, playwright_instance, group_name: str, max_events: int) -> List[EventData]:
+        """Try scraping in headless mode with restored session."""
+        browser = playwright_instance.chromium.launch(
             headless=True,
             args=self.config.browser_args
         )
         
         try:
+            context = browser.new_context()
             page = context.new_page()
             
-            # Navigate and wait properly
+            # Try to load existing session
+            session_loaded = self._load_session(page)
+            if not session_loaded:
+                raise LoginRequiredError("No valid session found")
+            
             if not self._navigate_to_group_events(page, group_name):
-                return True
+                raise LoginRequiredError("Navigation failed")
             
-            # Wait for page to load and check login status
-            time.sleep(3)
-            is_login_needed = self._is_login_page(page)
+            if self._is_login_page(page):
+                raise LoginRequiredError("Login page detected")
             
-            if is_login_needed:
-                self.logger.debug("🔍 Login check: Login required")
-            else:
-                self.logger.debug("🔍 Login check: Already logged in")
-                
-            return is_login_needed
+            # Check if we can see events (indicating we're logged in)
+            time.sleep(2)
+            event_cards = page.locator('[id^="past-event-card-ep-"]')
+            if event_cards.count() == 0:
+                raise LoginRequiredError("No events visible - may need login")
             
-        except Exception as e:
-            self.logger.debug(f"🔍 Login check failed: {e}")
-            return True  # Assume login needed on any error
+            self.logger.info("🤖 Session valid - proceeding with headless scraping")
+            return self._scrape_events(page, group_name, max_events)
+            
         finally:
-            context.close()
+            browser.close()
+    
+    def _scrape_with_login_and_switch(self, playwright_instance, group_name: str, max_events: int) -> List[EventData]:
+        """Handle login in non-headless, then switch to headless for scraping."""
+        # Step 1: Login in non-headless mode
+        browser = playwright_instance.chromium.launch(
+            headless=False,  # Non-headless for login
+            args=self.config.browser_args
+        )
+        
+        try:
+            context = browser.new_context()
+            page = context.new_page()
+            
+            if not self._navigate_to_group_events(page, group_name):
+                raise NavigationError("Failed to navigate to events page")
+            
+            if self._is_login_page(page):
+                if not self._wait_for_login(page):
+                    raise Exception("Login failed or was cancelled")
+            
+            # Save session after successful login
+            self._save_session(page)
+            self.logger.info("✅ Login completed - switching to headless mode")
+            
+        finally:
+            browser.close()
+        
+        # Step 2: Now scrape in headless mode with saved session
+        return self._try_headless_scraping(playwright_instance, group_name, max_events)
+    
+    def _quick_login_check(self, playwright_instance, group_name: str) -> bool:
+        """Quick check if login is needed using headless mode."""
+        try:
+            context = playwright_instance.chromium.launch_persistent_context(
+                user_data_dir=str(self.config.browser_state_dir),
+                headless=True,
+                args=self.config.browser_args
+            )
+            
+            try:
+                page = context.new_page()
+                
+                # Navigate and wait properly
+                if not self._navigate_to_group_events(page, group_name):
+                    self.logger.info("🔍 Navigation failed - assuming login needed")
+                    return True
+                
+                # Wait for page to load and check login status
+                time.sleep(3)
+                
+                # Check multiple indicators that we're logged in
+                # Look for event cards (indicating we're on the events page)
+                event_cards = page.locator('[id^="past-event-card-ep-"]')
+                has_events = event_cards.count() > 0
+                
+                # Check if we're on login page
+                is_login_page = self._is_login_page(page)
+                
+                # We're logged in if we have events and we're not on login page
+                is_logged_in = has_events and not is_login_page
+                
+                if is_logged_in:
+                    self.logger.info("🔍 Already logged in - proceeding with headless scraping")
+                    return False
+                else:
+                    self.logger.info("🔍 Login required")
+                    return True
+                    
+            finally:
+                context.close()
+                
+        except Exception as e:
+            self.logger.info(f"🔍 Login check failed ({e}) - assuming login needed")
+            return True  # Assume login needed on any error
     
     def _scrape_with_login(self, playwright_instance, group_name: str, max_events: int) -> List[EventData]:
         """Handle login in non-headless mode, then switch to headless for scraping."""
-        # Start non-headless for login
+        # Step 1: Handle login in non-headless mode
         context = playwright_instance.chromium.launch_persistent_context(
             user_data_dir=str(self.config.browser_state_dir),
             headless=False,  # Non-headless for login
@@ -216,13 +361,14 @@ class MeetupScraper:
                 if not self._wait_for_login(page):
                     raise Exception("Login failed or was cancelled")
             
-            self.logger.info("✅ Login completed - continuing with scraping")
-            
-            # Continue scraping in the same session (non-headless)
-            return self._scrape_events(page, group_name, max_events)
+            self.logger.info("✅ Login completed - switching to headless mode for scraping")
             
         finally:
             context.close()
+        
+        # Step 2: Now scrape in headless mode with saved session
+        time.sleep(2)  # Give time for session to be saved
+        return self._scrape_in_headless_mode(playwright_instance, group_name, max_events)
     
     def _scrape_in_headless_mode(self, playwright_instance, group_name: str, max_events: int) -> List[EventData]:
         """Perform the actual scraping in headless mode."""
@@ -632,7 +778,7 @@ class MeetupScraper:
                 json.dump(asdict(event_data), f, indent=2, ensure_ascii=False)
                 
         except Exception as e:
-            raise ExtractionError(f"Failed to save event data: {e}")
+            raise DataExtractionError(f"Failed to save event data: {e}")
     
     def _save_to_csv(self, event_data: EventData) -> None:
         """Save event data to CSV file."""
