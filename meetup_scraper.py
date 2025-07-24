@@ -9,7 +9,6 @@ Handles login detection and session persistence with comprehensive data extracti
 import time
 import json
 import re
-import requests
 import logging
 from datetime import datetime
 from dataclasses import dataclass, asdict
@@ -31,7 +30,6 @@ class ScraperConfig:
     project_dir: Path = Path(__file__).parent
     browser_state_dir: Path = project_dir / "browser_state"
     events_dir: Path = project_dir / "events"
-    attendees_dir: Path = project_dir / "events" / "attendees"
     
     # Timeouts (milliseconds)
     navigation_timeout: int = 30000
@@ -42,10 +40,6 @@ class ScraperConfig:
     max_scroll_attempts: int = 20
     scroll_wait_time: int = 2
     page_load_wait: int = 3
-    
-    # Avatar settings
-    avatar_timeout: int = 10
-    avatar_format: str = "jpg"
     
     # Browser settings
     browser_args: List[str] = None
@@ -72,16 +66,6 @@ class EventData:
     attendees: str
     location: str
     details: str
-    attendees_list: List[Dict]
-
-
-@dataclass
-class AttendeeData:
-    """Data structure for attendee information."""
-    name: str
-    is_host: bool
-    avatar_path: str
-    guests: int
 
 
 # =============================================================================
@@ -138,7 +122,6 @@ class DirectoryManager:
         """Create necessary directories for storing browser state and events data."""
         config.browser_state_dir.mkdir(exist_ok=True)
         config.events_dir.mkdir(exist_ok=True)
-        config.attendees_dir.mkdir(exist_ok=True)
 
 
 class DateParser:
@@ -185,12 +168,6 @@ class FilenameUtils:
         """Make filename filesystem-safe."""
         safe_name = re.sub(r'[^\w\s-]', '', filename).strip()
         return re.sub(r'[-\s]+', '-', safe_name)
-    
-    @staticmethod
-    def extract_member_id(avatar_url: str) -> str:
-        """Extract member ID from avatar URL."""
-        match = re.search(r'thumb_(\d+)', avatar_url)
-        return match.group(1) if match else ""
 
 
 # =============================================================================
@@ -338,258 +315,19 @@ class EventLoader:
 
 
 # =============================================================================
-# AVATAR MANAGEMENT
-# =============================================================================
-
-class AvatarManager:
-    """Handles avatar downloading and management."""
-    
-    def __init__(self, config: ScraperConfig, logger: logging.Logger):
-        self.config = config
-        self.logger = logger
-    
-    def download_avatar(self, avatar_url: str, attendee_name: str) -> str:
-        """
-        Download an avatar image and save it to the attendees directory.
-        
-        Args:
-            avatar_url: URL of the avatar image
-            attendee_name: Attendee name to use in filename
-            
-        Returns:
-            Relative path to the saved avatar or empty string if failed
-        """
-        try:
-            member_id = FilenameUtils.extract_member_id(avatar_url)
-            safe_name = FilenameUtils.sanitize_filename(attendee_name)
-            
-            # Create filename with format: [name]_[member_id].jpg
-            filename = f"{safe_name}_{member_id}.{self.config.avatar_format}" if member_id else f"{safe_name}.{self.config.avatar_format}"
-            avatar_path = self.config.attendees_dir / filename
-            
-            # Don't overwrite existing files
-            if avatar_path.exists():
-                return f"events/attendees/{filename}"
-            
-            # Download and save
-            response = requests.get(avatar_url, timeout=self.config.avatar_timeout)
-            response.raise_for_status()
-            
-            with open(avatar_path, 'wb') as f:
-                f.write(response.content)
-                
-            return f"events/attendees/{filename}"
-            
-        except Exception as e:
-            self.logger.warning(f"      ⚠️  Failed to download avatar for {attendee_name}: {e}")
-            return ""
-
-
-# =============================================================================
-# ATTENDEE EXTRACTION
-# =============================================================================
-
-class AttendeeExtractor:
-    """Handles extraction of attendee information."""
-    
-    def __init__(self, config: ScraperConfig, logger: logging.Logger, avatar_manager: AvatarManager):
-        self.config = config
-        self.logger = logger
-        self.avatar_manager = avatar_manager
-    
-    def extract_attendees(self, page: Page, event_url: str) -> List[Dict]:
-        """
-        Extract attendee information including names, host status, avatars, and guest counts.
-        
-        Args:
-            page: Playwright page object
-            event_url: URL of the event page
-            
-        Returns:
-            List of attendee dictionaries
-        """
-        attendees = []
-        
-        try:
-            self.logger.info("      👥 Extracting attendees...")
-            
-            # Navigate to attendees page
-            if not self._navigate_to_attendees_page(page):
-                return attendees
-            
-            # Load all attendees
-            self._load_all_attendees(page)
-            
-            # Extract attendee data
-            attendees = self._extract_attendee_data(page)
-            
-        except Exception as e:
-            self.logger.error(f"      ⚠️  Error extracting attendees: {e}")
-        
-        return attendees
-    
-    def _navigate_to_attendees_page(self, page: Page) -> bool:
-        """Navigate to the attendees page."""
-        try:
-            # Click attendees button
-            attendees_button = page.locator('#attendees-btn')
-            if attendees_button.count() == 0:
-                self.logger.warning("      ⚠️  Attendees button not found")
-                return False
-            
-            attendees_button.click()
-            time.sleep(2)
-            
-            # Handle potential paywall
-            self._handle_paywall(page)
-            
-            return True
-            
-        except Exception as e:
-            self.logger.error(f"      ⚠️  Failed to navigate to attendees page: {e}")
-            return False
-    
-    def _handle_paywall(self, page: Page) -> None:
-        """Handle paywall if present."""
-        try:
-            # Use CSS selector instead of brittle XPath
-            paywall_selector = "#modal > div > div.fixed.inset-0.m-0.size-full.max-w-none.\\!rounded-none.border-0.md\\:m-0.md\\:size-auto.md\\:max-w-none.md\\:\\!rounded-lg.md\\:border-0.hidden.relative.sm\\:block.bg-white.rounded-lg.shadow-lg.z-50.max-h-screen.overflow-y-auto > div > div > div.relative.mx-6.mb-0.mt-14.flex.max-w-\\[368px\\].flex-col.space-y-8.md\\:mx-10.md\\:my-14 > div.flex.max-h-\\[calc\\(100vh-230px\\)\\].flex-col.space-y-8.overflow-y-auto.md\\:max-h-none.md\\:overflow-y-visible > div > button"
-            paywall_button = page.locator(paywall_selector)
-            if paywall_button.count() > 0 and paywall_button.is_visible(timeout=self.config.element_timeout):
-                self.logger.info("      💰 Handling paywall...")
-                paywall_button.click()
-                time.sleep(2)
-        except Exception:
-            pass  # No paywall or couldn't handle it
-    
-    def _load_all_attendees(self, page: Page) -> None:
-        """Scroll to load all attendees."""
-        try:
-            for _ in range(3):
-                page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
-                time.sleep(1)
-        except Exception:
-            pass
-    
-    def _extract_attendee_data(self, page: Page) -> List[Dict]:
-        """Extract attendee data from the page."""
-        attendees = []
-        seen_attendees = set()
-        
-        # Find attendee containers
-        base_selector = "#page > div.flex.flex-grow.flex-col > main > div.md\\:max-w-screen.z-10.mb-5.w-full.sm\\:my-4.sm\\:px-5.md\\:w-\\[750px\\].md\\:w-\\[600px\\] > div > div:nth-child(6) > div"
-        attendees_container = page.locator(base_selector)
-        
-        if attendees_container.count() == 0:
-            self.logger.info("      👥 Found 0 attendee containers")
-            return attendees
-        
-        attendee_containers = attendees_container.locator("> div")
-        attendee_count = attendee_containers.count()
-        self.logger.info(f"      👥 Found {attendee_count} attendee containers using CSS selector")
-        
-        # Process each attendee
-        for i in range(attendee_count):
-            try:
-                container = attendee_containers.nth(i)
-                attendee_data = self._extract_single_attendee(container, seen_attendees)
-                
-                if attendee_data:
-                    attendees.append(asdict(attendee_data))
-                    guest_info = f" (+{attendee_data.guests} guest{'s' if attendee_data.guests != 1 else ''})" if attendee_data.guests > 0 else ""
-                    host_info = " (Host)" if attendee_data.is_host else ""
-                    self.logger.info(f"      ✅ Attendee {len(attendees)}: {attendee_data.name}{host_info}{guest_info}")
-                    
-            except Exception as e:
-                self.logger.warning(f"      ⚠️  Error extracting attendee {i+1}: {e}")
-                continue
-        
-        return attendees
-    
-    def _extract_single_attendee(self, container, seen_attendees: set) -> Optional[AttendeeData]:
-        """Extract data for a single attendee."""
-        # Extract name
-        name_element = container.locator("div > div > div > div > button > div > div > p")
-        attendee_name = name_element.inner_text().strip() if name_element.count() > 0 else "Unknown"
-        
-        # Extract host status
-        host_element = container.locator("div > div > div > div > button > div > div > div > div:first-child")
-        is_host = False
-        if host_element.count() > 0:
-            host_text = host_element.inner_text().strip()
-            is_host = "Event host" in host_text
-        
-        # Extract guests
-        guests = self._extract_guest_count(container.inner_text())
-        
-        # Check for duplicates
-        attendee_key = f"{attendee_name}_{is_host}"
-        if attendee_key in seen_attendees:
-            return None
-        
-        # Validate name
-        if not attendee_name or attendee_name == "Unknown" or len(attendee_name) <= 2:
-            return None
-        
-        # Extract avatar
-        avatar_path = self._extract_avatar(container, attendee_name)
-        
-        seen_attendees.add(attendee_key)
-        return AttendeeData(
-            name=attendee_name,
-            is_host=is_host,
-            avatar_path=avatar_path,
-            guests=guests
-        )
-    
-    def _extract_guest_count(self, container_text: str) -> int:
-        """Extract guest count from container text."""
-        guest_patterns = [
-            r'\+(\d+)',  # "+1", "+2", etc.
-            r'plus\s+(\d+)',  # "plus 1", "plus 2"
-            r'(\d+)\s+guest',  # "1 guest", "2 guests"
-            r'bringing\s+(\d+)',  # "bringing 1", "bringing 2"
-        ]
-        
-        for pattern in guest_patterns:
-            match = re.search(pattern, container_text, re.IGNORECASE)
-            if match:
-                return int(match.group(1))
-        
-        # If no number found but text contains guest-related words, assume 1
-        if any(word in container_text.lower() for word in ['guest', 'plus', '+', 'bringing']):
-            return 1
-            
-        return 0
-    
-    def _extract_avatar(self, container, attendee_name: str) -> str:
-        """Extract avatar for an attendee."""
-        try:
-            avatar_img = container.locator("div > div > div > div > button > div > picture > img")
-            if avatar_img.count() > 0:
-                avatar_url = avatar_img.first.get_attribute('src')
-                if avatar_url:
-                    return self.avatar_manager.download_avatar(avatar_url, attendee_name)
-        except Exception:
-            pass
-        return ""
-
-
-# =============================================================================
 # EVENT DETAILS EXTRACTION
 # =============================================================================
 
 class EventDetailsExtractor:
     """Handles extraction of event details and location."""
     
-    def __init__(self, config: ScraperConfig, logger: logging.Logger, attendee_extractor: AttendeeExtractor):
+    def __init__(self, config: ScraperConfig, logger: logging.Logger):
         self.config = config
         self.logger = logger
-        self.attendee_extractor = attendee_extractor
     
-    def extract_event_details(self, page: Page, event_url: str, return_url: str) -> Tuple[str, str, List[Dict]]:
+    def extract_event_details(self, page: Page, event_url: str, return_url: str) -> Tuple[str, str]:
         """
-        Visit an individual event page and extract location, details, and attendees.
+        Visit an individual event page and extract location and details.
         
         Args:
             page: Playwright page object
@@ -597,7 +335,7 @@ class EventDetailsExtractor:
             return_url: URL to return to after extraction
             
         Returns:
-            Tuple of (location, details, attendees)
+            Tuple of (location, details)
         """
         try:
             self.logger.info("      🔍 Visiting event page...")
@@ -606,13 +344,12 @@ class EventDetailsExtractor:
             
             location = self._extract_location(page)
             details = self._extract_details(page)
-            attendees = self.attendee_extractor.extract_attendees(page, event_url)
             
             # Navigate back
             page.goto(return_url, wait_until="domcontentloaded", timeout=self.config.navigation_timeout)
             time.sleep(1)
             
-            return location, details, attendees
+            return location, details
             
         except Exception as e:
             self.logger.error(f"      ⚠️  Error extracting event details: {e}")
@@ -621,7 +358,7 @@ class EventDetailsExtractor:
                 time.sleep(1)
             except:
                 pass
-            return "Location not found", "Details not found", []
+            return "Location not found", "Details not found"
     
     def _extract_location(self, page: Page) -> str:
         """Extract location from event page."""
@@ -710,9 +447,7 @@ class EventScraper:
     def __init__(self, config: ScraperConfig, logger: logging.Logger):
         self.config = config
         self.logger = logger
-        self.avatar_manager = AvatarManager(config, logger)
-        self.attendee_extractor = AttendeeExtractor(config, logger, self.avatar_manager)
-        self.details_extractor = EventDetailsExtractor(config, logger, self.attendee_extractor)
+        self.details_extractor = EventDetailsExtractor(config, logger)
     
     def scrape_events(self, page: Page, max_events: int) -> List[EventData]:
         """
@@ -761,12 +496,12 @@ class EventScraper:
                 self.logger.info(f"      🔍 Event ID: {event_id}, Date: {date_string}")
                 self.logger.info(f"   🔍 [{len(events)+1}/{max_events}] {event_name[:50]}...")
                 
-                location, details, attendees_list = self.details_extractor.extract_event_details(
+                location, details = self.details_extractor.extract_event_details(
                     page, event_url, events_list_url
                 )
                 
-                # Calculate attendees summary
-                attendees_summary = self._calculate_attendees_summary(attendees_list)
+                # Get attendees count from the main page
+                attendees_summary = self._extract_attendees_count(event_card)
                 
                 # Create event data
                 event_data = EventData(
@@ -776,8 +511,7 @@ class EventScraper:
                     date=date_string,
                     attendees=attendees_summary,
                     location=location,
-                    details=details,
-                    attendees_list=attendees_list
+                    details=details
                 )
                 
                 events.append(event_data)
@@ -869,15 +603,29 @@ class EventScraper:
         except:
             return False
     
-    def _calculate_attendees_summary(self, attendees_list: List[Dict]) -> str:
-        """Calculate attendees summary from attendees list."""
-        total_members = len(attendees_list)
-        total_guests = sum(attendee.get('guests', 0) for attendee in attendees_list)
-        
-        if total_guests > 0:
-            return f"{total_members} members + {total_guests} guests = {total_members + total_guests} total"
-        else:
-            return f"{total_members} members"
+    def _extract_attendees_count(self, event_card) -> str:
+        """Extract attendees count from the event card on the main page."""
+        try:
+            card_text = event_card.inner_text()
+            
+            # Look for patterns like "15 attendees", "3 members", etc.
+            patterns = [
+                r'(\d+)\s+attendees?',
+                r'(\d+)\s+members?',
+                r'(\d+)\s+people',
+                r'(\d+)\s+going'
+            ]
+            
+            for pattern in patterns:
+                match = re.search(pattern, card_text, re.IGNORECASE)
+                if match:
+                    count = int(match.group(1))
+                    return f"{count} attendees"
+            
+            return "Attendees count not available"
+            
+        except Exception:
+            return "Attendees count not available"
     
     def _save_event_immediately(self, event_data: EventData, event_num: int, max_events: int) -> None:
         """Save event data immediately after processing."""
