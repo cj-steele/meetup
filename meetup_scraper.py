@@ -53,6 +53,7 @@ class EventData:
     url: str
     name: str
     date: str
+    time: str
     attendees: int
     host: str
     location: str
@@ -228,18 +229,22 @@ class MeetupScraper:
             try:
                 event_id = self._extract_event_id(event_url)
                 
-                name, date, host, location, details, attendees = self._extract_event_details(
+                name, raw_date, host, location, details, attendees = self._extract_event_details(
                     page, event_url, events_list_url
                 )
                 
                 if is_cancelled:
                     attendees = 0
                 
+                # Split date and time for better CSV handling
+                date_part, time_part = self._split_date_time(raw_date)
+                
                 event_data = EventData(
                     id=event_id,
                     url=self._clean_event_url(event_url),
                     name=name,
-                    date=date,
+                    date=date_part,
+                    time=time_part,
                     attendees=attendees,
                     host=host,
                     location=location,
@@ -452,9 +457,8 @@ class MeetupScraper:
         """Save event data to file."""
         try:
             try:
-                # Clean the date string to handle time ranges and newlines
-                cleaned_date = self._clean_date_string(event_data.date)
-                parsed_date = dateutil_parse(cleaned_date)
+                # Parse the date field (which is now just the date part)
+                parsed_date = dateutil_parse(event_data.date)
                 iso_date = parsed_date.strftime('%Y-%m-%d')
             except Exception:
                 today = datetime.now()
@@ -479,7 +483,7 @@ class MeetupScraper:
             file_exists = self.csv_file_path.exists()
             
             with open(self.csv_file_path, 'a', newline='', encoding='utf-8') as csvfile:
-                fieldnames = ['id', 'url', 'name', 'date', 'attendees', 'host', 'location', 'details', 'cancelled']
+                fieldnames = ['id', 'url', 'name', 'date', 'time', 'attendees', 'host', 'location', 'details', 'cancelled']
                 writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
                 
                 # Write headers if file is new
@@ -492,23 +496,30 @@ class MeetupScraper:
         except Exception as e:
             self.logger.warning(f"⚠️  Failed to save to CSV: {e}")
     
-    def _clean_date_string(self, date_string: str) -> str:
-        """Clean date string to make it parseable by dateutil."""
+    def _split_date_time(self, raw_date_string: str) -> tuple[str, str]:
+        """Split raw date string into separate date and time parts."""
         try:
-            # Handle newlines in date strings
-            cleaned = date_string.replace('\n', ' ')
+            # Primary case: Handle newlines in date strings
+            if '\n' in raw_date_string:
+                # Format: "Wednesday, July 23, 2025\n10:00 AM to 4:00 PM BST"
+                parts = raw_date_string.split('\n')
+                date_part = parts[0].strip()
+                time_part = parts[1].strip() if len(parts) > 1 else ""
+                return date_part, time_part
             
-            # Handle time ranges like "10:00 AM to 4:00 PM BST" - take just the start time
-            if ' to ' in cleaned:
-                cleaned = cleaned.split(' to ')[0]
+            # Secondary case: Look for " at " pattern
+            if ' at ' in raw_date_string:
+                # Format: "Thursday, July 24, 2025 at 9:00 AM"
+                parts = raw_date_string.split(' at ', 1)
+                date_part = parts[0].strip()
+                time_part = parts[1].strip()
+                return date_part, time_part
             
-            # Handle other time range formats
-            if ' - ' in cleaned:
-                cleaned = cleaned.split(' - ')[0]
-                
-            return cleaned.strip()
+            # Fallback: If no clear separator, treat whole string as date
+            return raw_date_string.strip(), ""
+            
         except Exception:
-            return date_string
+            return raw_date_string, ""
 
 
 @click.command()
