@@ -634,9 +634,9 @@ class EventScraper:
             file_manager.save_event_data(event_data)
             
             iso_date = DateParser.parse_date_to_iso_format(event_data.date)
-            directory_name = f"{iso_date}_{event_data.id}"
+            directory_name = f"{iso_date}"
             
-            self.logger.info(f"      ✅ Event {event_num} complete and saved: {directory_name}")
+            self.logger.info(f"      ✅ Event {event_num} complete and saved: {directory_name}/{event_data.id}.json")
             self.logger.info(f"      📊 Progress: {event_num}/{max_events} events collected")
             
             if event_num >= max_events:
@@ -667,10 +667,10 @@ class FileManager:
         """
         try:
             iso_date = DateParser.parse_date_to_iso_format(event_data.date)
-            event_dir = self.config.events_dir / f"{iso_date}_{event_data.id}"
+            event_dir = self.config.events_dir / f"{iso_date}"
             event_dir.mkdir(exist_ok=True)
             
-            data_file = event_dir / "data.json"
+            data_file = event_dir / f"{event_data.id}.json"
             with open(data_file, 'w', encoding='utf-8') as f:
                 json.dump(asdict(event_data), f, indent=2, ensure_ascii=False)
                 
