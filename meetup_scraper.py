@@ -66,6 +66,7 @@ class EventData:
     attendees: str
     location: str
     details: str
+    cancelled: bool
 
 
 # =============================================================================
@@ -325,9 +326,9 @@ class EventDetailsExtractor:
         self.config = config
         self.logger = logger
     
-    def extract_event_details(self, page: Page, event_url: str, return_url: str) -> Tuple[str, str]:
+    def extract_event_details(self, page: Page, event_url: str, return_url: str) -> Tuple[str, str, str, str, str]:
         """
-        Visit an individual event page and extract location and details.
+        Visit an individual event page and extract name, date, location, details, and attendees.
         
         Args:
             page: Playwright page object
@@ -335,21 +336,24 @@ class EventDetailsExtractor:
             return_url: URL to return to after extraction
             
         Returns:
-            Tuple of (location, details)
+            Tuple of (name, date, location, details, attendees)
         """
         try:
             self.logger.info("      🔍 Visiting event page...")
             page.goto(event_url, wait_until="domcontentloaded", timeout=self.config.navigation_timeout)
             time.sleep(2)
             
+            name = self._extract_name(page)
+            date = self._extract_date(page)
             location = self._extract_location(page)
             details = self._extract_details(page)
+            attendees = self._extract_attendees(page)
             
             # Navigate back
             page.goto(return_url, wait_until="domcontentloaded", timeout=self.config.navigation_timeout)
             time.sleep(1)
             
-            return location, details
+            return name, date, location, details, attendees
             
         except Exception as e:
             self.logger.error(f"      ⚠️  Error extracting event details: {e}")
@@ -358,7 +362,60 @@ class EventDetailsExtractor:
                 time.sleep(1)
             except:
                 pass
-            return "Location not found", "Details not found"
+            return "Name not found", "Date unknown", "Location not found", "Details not found", "0"
+    
+    def _extract_name(self, page: Page) -> str:
+        """Extract event name from individual event page."""
+        try:
+            name_selector = "#main > div.px-5.w-full.bg-white.border-b.border-shadowColor.py-2.lg\\:py-6 > div > h1"
+            name_elem = page.locator(name_selector)
+            
+            if name_elem.count() > 0:
+                name = name_elem.inner_text().strip()
+                if name:
+                    return name
+                    
+        except Exception:
+            pass
+        
+        return "Name not found"
+    
+    def _extract_date(self, page: Page) -> str:
+        """Extract event date from individual event page."""
+        try:
+            date_selector = "#event-info > div > div:nth-child(1) > div.flex.gap-x-4.md\\:gap-x-4\\.5.lg\\:gap-x-5 > div:nth-child(2) > div > time"
+            date_elem = page.locator(date_selector)
+            
+            if date_elem.count() > 0:
+                date = date_elem.inner_text().strip()
+                if date:
+                    return date
+                    
+        except Exception:
+            pass
+        
+        return "Date unknown"
+    
+    def _extract_attendees(self, page: Page) -> str:
+        """Extract attendees count from individual event page."""
+        try:
+            attendees_selector = "#attendees > div.flex.items-center.justify-between > h2"
+            attendees_elem = page.locator(attendees_selector)
+            
+            if attendees_elem.count() > 0:
+                attendees_text = attendees_elem.inner_text().strip()
+                if attendees_text:
+                    # Extract number from text like "24 attendees" or "Going (15)"
+                    match = re.search(r'(\d+)', attendees_text)
+                    if match:
+                        count = int(match.group(1))
+                        return f"{count} attendees"
+                    return attendees_text
+                    
+        except Exception:
+            pass
+        
+        return "0"  # Default for cancelled events or when element not found
     
     def _extract_location(self, page: Page) -> str:
         """Extract location from event page."""
@@ -451,7 +508,9 @@ class EventScraper:
     
     def scrape_events(self, page: Page, max_events: int) -> List[EventData]:
         """
-        Scrape event data from the loaded page, excluding cancelled events.
+        Scrape event data using two-phase approach:
+        Phase 1: Extract URLs and cancelled status from main page
+        Phase 2: Visit individual pages for detailed extraction
         
         Args:
             page: Playwright page object with events loaded
@@ -463,137 +522,142 @@ class EventScraper:
         events = []
         events_list_url = page.url
         
-        self.logger.info("🔍 Scraping event data (excluding cancelled events)...")
+        # Phase 1: Extract URLs and cancelled status from main page
+        self.logger.info("📋 Phase 1: Caching event URLs and cancelled status...")
+        cached_events = self._cache_event_urls_and_status(page, max_events)
         
-        # Find all event cards
-        event_cards = page.locator('[id^="past-event-card-ep-"]')
-        event_count = event_cards.count()
-        self.logger.info(f"🔍 Found {event_count} event cards to process...")
+        if not cached_events:
+            self.logger.warning("No events found to process")
+            return events
         
-        processed_count = 0
+        # Phase 2: Visit individual pages for detailed extraction
+        self.logger.info(f"🔍 Phase 2: Visiting {len(cached_events)} individual event pages...")
         
-        for i in range(event_count):
-            if len(events) >= max_events:
-                break
-                
+        for i, (event_url, is_cancelled) in enumerate(cached_events):
             try:
-                processed_count += 1
-                event_card = event_cards.nth(i)
+                # Extract event ID from URL
+                event_id = ""
+                try:
+                    match = re.search(r'/events/(\d+)', event_url)
+                    if match:
+                        event_id = match.group(1)
+                except Exception:
+                    pass
                 
-                # Extract basic event info
-                event_info = self._extract_basic_event_info(event_card, i + 1, max_events)
-                if not event_info:
-                    continue
+                self.logger.info(f"   🔍 [{i+1}/{len(cached_events)}] Event ID: {event_id}, Cancelled: {is_cancelled}")
                 
-                event_url, event_name, date_string, event_id = event_info
-                
-                # Skip cancelled events
-                if self._is_cancelled_event(event_card):
-                    self.logger.info(f"   ⚠️  Skipped cancelled event: {event_name[:50]}...")
-                    continue
-                
-                # Extract detailed information
-                self.logger.info(f"      🔍 Event ID: {event_id}, Date: {date_string}")
-                self.logger.info(f"   🔍 [{len(events)+1}/{max_events}] {event_name[:50]}...")
-                
-                location, details = self.details_extractor.extract_event_details(
+                # Extract detailed information from individual event page
+                name, date, location, details, attendees = self.details_extractor.extract_event_details(
                     page, event_url, events_list_url
                 )
                 
-                # Get attendees count from the main page
-                attendees_summary = self._extract_attendees_count(event_card)
+                # For cancelled events, default attendees to 0
+                if is_cancelled and (attendees == "0" or "not found" in attendees.lower()):
+                    attendees = "0"
                 
                 # Create event data
                 event_data = EventData(
                     id=event_id,
                     url=event_url,
-                    name=event_name,
-                    date=date_string,
-                    attendees=attendees_summary,
+                    name=name,
+                    date=date,
+                    attendees=attendees,
                     location=location,
-                    details=details
+                    details=details,
+                    cancelled=is_cancelled
                 )
                 
                 events.append(event_data)
                 
                 # Save immediately
-                self._save_event_immediately(event_data, len(events), max_events)
+                self._save_event_immediately(event_data, i + 1, len(cached_events))
                 
             except Exception as e:
-                self.logger.error(f"   ⚠️  Error processing event card {i+1}: {e}")
-                self.logger.info(f"   📊 Continuing to next event... (current progress: {len(events)}/{max_events})")
+                self.logger.error(f"   ⚠️  Error processing event {i+1}: {e}")
+                self.logger.info(f"   📊 Continuing to next event... (current progress: {len(events)}/{len(cached_events)})")
                 continue
         
-        self.logger.info(f"✅ Scraped {len(events)} valid events (processed {processed_count} total)")
+        self.logger.info(f"✅ Scraped {len(events)} events (including {sum(1 for e in events if e.cancelled)} cancelled)")
         return events
     
-    def _extract_basic_event_info(self, event_card, card_num: int, max_events: int) -> Optional[Tuple[str, str, str, str]]:
-        """Extract basic event information from event card."""
+    def _cache_event_urls_and_status(self, page: Page, max_events: int) -> List[Tuple[str, bool]]:
+        """
+        Extract URLs and cancelled status from all event cards on the main page.
+        
+        Args:
+            page: Playwright page object
+            max_events: Maximum number of events to extract
+            
+        Returns:
+            List of tuples: (event_url, is_cancelled)
+        """
+        cached_events = []
+        
         try:
-            # Extract URL with robust fallback logic
-            event_url = ""
-            try:
-                # Try to find a link within the card first
-                card_link = event_card.locator('a').first
-                if card_link.count() > 0:
-                    event_url = card_link.get_attribute('href')
-                    if event_url and not event_url.startswith('http'):
-                        event_url = f"https://www.meetup.com{event_url}"
-                else:
-                    # Try getting href from the card itself if it's a link
-                    href = event_card.get_attribute('href')
-                    if href:
-                        event_url = href if href.startswith('http') else f"https://www.meetup.com{href}"
-            except Exception:
-                pass
+            # Find all event cards
+            event_cards = page.locator('[id^="past-event-card-ep-"]')
+            event_count = event_cards.count()
+            self.logger.info(f"   Found {event_count} event cards to cache...")
             
-            if not event_url:
-                self.logger.warning(f"   ⚠️  Skipped card {card_num} - could not extract URL")
-                return None
+            for i in range(min(event_count, max_events)):
+                try:
+                    event_card = event_cards.nth(i)
+                    
+                    # Extract URL
+                    event_url = self._extract_url_from_card(event_card, i + 1)
+                    if not event_url:
+                        continue
+                    
+                    # Check if cancelled
+                    is_cancelled = self._is_cancelled_event(event_card)
+                    
+                    cached_events.append((event_url, is_cancelled))
+                    status = "CANCELLED" if is_cancelled else "ACTIVE"
+                    self.logger.info(f"   ✅ Cached {i+1}: {status} - {event_url}")
+                    
+                except Exception as e:
+                    self.logger.warning(f"   ⚠️  Error caching event card {i+1}: {e}")
+                    continue
             
-            # Extract name
-            event_name = ""
-            try:
-                name_element = event_card.locator('div.flex.flex-col.space-y-5.overflow-hidden > div > div > span')
-                if name_element.count() > 0:
-                    event_name = name_element.first.inner_text().strip()
-            except Exception:
-                pass
-            
-            if not event_name:
-                event_name = f"Event {card_num}"
-            
-            # Extract date
-            date_string = ""
-            try:
-                date_element = event_card.locator('div.flex.flex-col.space-y-5.overflow-hidden > div > div > time')
-                if date_element.count() > 0:
-                    date_string = date_element.first.inner_text().strip()
-            except Exception:
-                pass
-            
-            if not date_string:
-                date_string = "Date unknown"
-            
-            # Extract event ID
-            event_id = ""
-            try:
-                match = re.search(r'/events/(\d+)', event_url)
-                if match:
-                    event_id = match.group(1)
-            except Exception:
-                pass
-            
-            # Validate we have minimum required info
-            if not event_url or not event_name:
-                self.logger.warning(f"   ⚠️  Skipped card {card_num} - missing basic info (name: {bool(event_name)}, url: {bool(event_url)})")
-                return None
-            
-            return event_url, event_name, date_string, event_id
+            self.logger.info(f"✅ Cached {len(cached_events)} events for processing")
+            return cached_events
             
         except Exception as e:
-            self.logger.error(f"   ⚠️  Error extracting basic info for card {card_num}: {e}")
-            return None
+            self.logger.error(f"❌ Error caching event URLs: {e}")
+            return []
+    
+    def _extract_url_from_card(self, event_card, card_num: int) -> Optional[str]:
+        """Extract URL from a single event card."""
+        try:
+            # Try to find a link within the card first
+            card_link = event_card.locator('a').first
+            if card_link.count() > 0:
+                event_url = card_link.get_attribute('href')
+                if event_url and not event_url.startswith('http'):
+                    event_url = f"https://www.meetup.com{event_url}"
+                return event_url
+            else:
+                # Try getting href from the card itself if it's a link
+                href = event_card.get_attribute('href')
+                if href:
+                    event_url = href if href.startswith('http') else f"https://www.meetup.com{href}"
+                    return event_url
+        except Exception:
+            pass
+        
+        # If standard methods fail, try alternative extraction
+        try:
+            # Look for any element with href containing 'events'
+            event_links = event_card.locator('[href*="/events/"]')
+            if event_links.count() > 0:
+                href = event_links.first.get_attribute('href')
+                if href:
+                    return href if href.startswith('http') else f"https://www.meetup.com{href}"
+        except Exception:
+            pass
+        
+        self.logger.warning(f"   ⚠️  Could not extract URL from card {card_num}")
+        return None
     
     def _is_cancelled_event(self, event_card) -> bool:
         """Check if event is cancelled."""
@@ -603,31 +667,7 @@ class EventScraper:
         except:
             return False
     
-    def _extract_attendees_count(self, event_card) -> str:
-        """Extract attendees count from the event card on the main page."""
-        try:
-            card_text = event_card.inner_text()
-            
-            # Look for patterns like "15 attendees", "3 members", etc.
-            patterns = [
-                r'(\d+)\s+attendees?',
-                r'(\d+)\s+members?',
-                r'(\d+)\s+people',
-                r'(\d+)\s+going'
-            ]
-            
-            for pattern in patterns:
-                match = re.search(pattern, card_text, re.IGNORECASE)
-                if match:
-                    count = int(match.group(1))
-                    return f"{count} attendees"
-            
-            return "Attendees count not available"
-            
-        except Exception:
-            return "Attendees count not available"
-    
-    def _save_event_immediately(self, event_data: EventData, event_num: int, max_events: int) -> None:
+    def _save_event_immediately(self, event_data: EventData, event_num: int, total_events: int) -> None:
         """Save event data immediately after processing."""
         try:
             file_manager = FileManager(self.config, self.logger)
@@ -635,16 +675,17 @@ class EventScraper:
             
             iso_date = DateParser.parse_date_to_iso_format(event_data.date)
             directory_name = f"{iso_date}"
+            status = " (CANCELLED)" if event_data.cancelled else ""
             
-            self.logger.info(f"      ✅ Event {event_num} complete and saved: {directory_name}/{event_data.id}.json")
-            self.logger.info(f"      📊 Progress: {event_num}/{max_events} events collected")
+            self.logger.info(f"      ✅ Event {event_num} complete and saved: {directory_name}/{event_data.id}.json{status}")
+            self.logger.info(f"      📊 Progress: {event_num}/{total_events} events collected")
             
-            if event_num >= max_events:
-                self.logger.info(f"      🎯 Reached target of {max_events} events - stopping")
+            if event_num >= total_events:
+                self.logger.info(f"      🎯 Completed all {total_events} events")
                 
         except Exception as e:
             self.logger.error(f"      ⚠️  Event {event_num} complete but save failed: {e}")
-            self.logger.info(f"      📊 Progress: {event_num}/{max_events} events collected")
+            self.logger.info(f"      📊 Progress: {event_num}/{total_events} events collected")
 
 
 # =============================================================================
