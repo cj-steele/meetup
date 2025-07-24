@@ -75,6 +75,8 @@ python meetup_scraper.py group-name --max-events 100 --no-csv
 | `--no-csv` | Disable CSV output (CSV enabled by default) |
 | `--no-json` | Disable JSON output (JSON enabled by default) |
 
+**Note:** Using both `--no-csv` and `--no-json` will exit early with a warning, as there would be no output saved.
+
 ### First Run
 
 On the first run, you'll be prompted to log in to Meetup:
@@ -150,6 +152,10 @@ python meetup_scraper.py p-o-s-g --max-events 50
 **Session problems:**
 - Session expires after 7 days automatically
 - Delete `session.json` if experiencing login loops
+
+**Output format errors:**
+- Using both `--no-csv` and `--no-json` will exit early with a helpful message
+- At least one output format must be enabled for scraping to proceed
 
 ## Output Format Details
 
