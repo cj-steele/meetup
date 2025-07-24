@@ -127,28 +127,7 @@ class DirectoryManager:
         config.events_dir.mkdir(exist_ok=True)
 
 
-class DateParser:
-    """Handles date parsing and formatting using dateutil."""
-    
-    @classmethod
-    def parse_date_to_iso_format(cls, date_string: str) -> str:
-        """
-        Parse date string and convert to ISO format YYYY-MM-DD using dateutil.
-        
-        Args:
-            date_string: Date like "WED, JUL 16, 2025, 10:00 AM BST"
-            
-        Returns:
-            Formatted date string like "2025-07-16"
-        """
-        try:
-            # Use dateutil to parse the date string - much more robust!
-            parsed_date = dateutil_parse(date_string)
-            return parsed_date.strftime('%Y-%m-%d')
-        except Exception:
-            # Fallback to today's date
-            today = datetime.now()
-            return f"{today.year}-{today.month:02d}-{today.day:02d}"
+
 
 
 class FilenameUtils:
@@ -716,7 +695,14 @@ class EventScraper:
             file_manager = FileManager(self.config, self.logger)
             file_manager.save_event_data(event_data)
             
-            iso_date = DateParser.parse_date_to_iso_format(event_data.date)
+            # Parse date using dateutil
+            try:
+                parsed_date = dateutil_parse(event_data.date)
+                iso_date = parsed_date.strftime('%Y-%m-%d')
+            except Exception:
+                # Fallback to today's date
+                today = datetime.now()
+                iso_date = f"{today.year}-{today.month:02d}-{today.day:02d}"
             directory_name = f"{iso_date}"
             safe_filename = FilenameUtils.make_filename_safe(event_data.name)
             status = " (CANCELLED)" if event_data.cancelled else ""
@@ -751,7 +737,14 @@ class FileManager:
             event_data: EventData object containing event information
         """
         try:
-            iso_date = DateParser.parse_date_to_iso_format(event_data.date)
+            # Parse date using dateutil
+            try:
+                parsed_date = dateutil_parse(event_data.date)
+                iso_date = parsed_date.strftime('%Y-%m-%d')
+            except Exception:
+                # Fallback to today's date
+                today = datetime.now()
+                iso_date = f"{today.year}-{today.month:02d}-{today.day:02d}"
             event_dir = self.config.events_dir / f"{iso_date}"
             event_dir.mkdir(exist_ok=True)
             
